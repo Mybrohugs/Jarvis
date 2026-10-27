@@ -1,0 +1,12 @@
+# Core (Windows, Python 3.13)
+numpy
+pywin32
+python-pptx
+python-docx
+Pillow
+# Optional features
+anthropic          # speeches and presentations (Claude API)
+pywebpush          # iPhone push notifications
+faster-whisper     # "Hey JARVIS" speech recognition
+openwakeword       # "Hey JARVIS" wake word
+sounddevice        # microphone

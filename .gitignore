@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv*/
+.jarvis-local.json
+.gemini-dev/
+.claude-dev/
+.images-dev/
+.sony-dev/
+.telegram-dev/
+.jarvis_local/

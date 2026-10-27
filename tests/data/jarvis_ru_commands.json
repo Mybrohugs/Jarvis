@@ -1,0 +1,515 @@
+[
+ {
+  "say": "статус",
+  "intent": "plan",
+  "tasks": [
+   "status"
+  ]
+ },
+ {
+  "say": "Как дела?",
+  "intent": "plan",
+  "tasks": [
+   "status"
+  ]
+ },
+ {
+  "say": "покажи журнал",
+  "intent": "plan",
+  "tasks": [
+   "audit"
+  ]
+ },
+ {
+  "say": "что ты сделал сегодня",
+  "intent": "plan",
+  "tasks": [
+   "audit"
+  ]
+ },
+ {
+  "say": "что в очереди с телефона",
+  "intent": "plan",
+  "tasks": [
+   "phone-queue"
+  ]
+ },
+ {
+  "say": "найди все файлы xlsx",
+  "intent": "plan",
+  "tasks": [
+   "search"
+  ],
+  "args": [
+   {
+    "pattern": "*.xlsx"
+   }
+  ]
+ },
+ {
+  "say": "найди файлы pdf и docx",
+  "intent": "plan",
+  "tasks": [
+   "search",
+   "search"
+  ],
+  "args": [
+   {
+    "pattern": "*.pdf"
+   },
+   {
+    "pattern": "*.docx"
+   }
+  ]
+ },
+ {
+  "say": "найди отчёты",
+  "intent": "plan",
+  "tasks": [
+   "search"
+  ],
+  "args": [
+   {
+    "pattern": "*отчёт*"
+   }
+  ]
+ },
+ {
+  "say": "скопируй docs/a.txt в archive/a.txt",
+  "intent": "plan",
+  "tasks": [
+   "file-plan"
+  ],
+  "args": [
+   {
+    "entries": [
+     {
+      "op": "copy",
+      "src": "docs/a.txt",
+      "dst": "archive/a.txt"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "say": "перемести docs/a.txt в archive/a.txt",
+  "intent": "plan",
+  "tasks": [
+   "file-plan"
+  ],
+  "args": [
+   {
+    "entries": [
+     {
+      "op": "move",
+      "src": "docs/a.txt",
+      "dst": "archive/a.txt"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "say": "переименуй файл docs/a.txt в b.txt",
+  "intent": "plan",
+  "tasks": [
+   "file-plan"
+  ],
+  "args": [
+   {
+    "entries": [
+     {
+      "op": "rename",
+      "src": "docs/a.txt",
+      "dst": "docs/b.txt"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "say": "сделай копию docs/отчёт.docx",
+  "intent": "plan",
+  "tasks": [
+   "file-plan"
+  ],
+  "args": [
+   {
+    "entries": [
+     {
+      "op": "copy",
+      "src": "docs/отчёт.docx",
+      "dst": "docs/отчёт-копия.docx"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "say": "прочитай документ docs/r.docx",
+  "intent": "plan",
+  "tasks": [
+   "office-read"
+  ],
+  "args": [
+   {
+    "path": "docs/r.docx"
+   }
+  ]
+ },
+ {
+  "say": "открой таблицу docs/t.xlsx",
+  "intent": "plan",
+  "tasks": [
+   "office-read"
+  ],
+  "args": [
+   {
+    "path": "docs/t.xlsx"
+   }
+  ]
+ },
+ {
+  "say": "добавь в docs/r.docx абзац «Итоги встречи: всё согласовано»",
+  "intent": "plan",
+  "tasks": [
+   "office-plan"
+  ],
+  "args": [
+   {
+    "src": "docs/r.docx",
+    "dst": "docs/r-jarvis.docx",
+    "op": "docx-append-paragraph",
+    "payload": {
+     "text": "Итоги встречи: всё согласовано"
+    }
+   }
+  ]
+ },
+ {
+  "say": "добавь строку «яблоко; 3» в таблицу docs/t.xlsx",
+  "intent": "plan",
+  "tasks": [
+   "office-plan"
+  ],
+  "args": [
+   {
+    "op": "xlsx-append-row",
+    "dst": "docs/t-jarvis.xlsx",
+    "payload": {
+     "cells": [
+      "яблоко",
+      "3"
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "say": "запиши в ячейку B2 таблицы docs/t.xlsx значение 42",
+  "intent": "plan",
+  "tasks": [
+   "office-plan"
+  ],
+  "args": [
+   {
+    "op": "xlsx-set-cell",
+    "payload": {
+     "cell": "B2",
+     "value": "42"
+    }
+   }
+  ]
+ },
+ {
+  "say": "добавь в docs/r.docx абзац «Привет, команда» и прочитай результат",
+  "intent": "plan",
+  "tasks": [
+   "office-plan",
+   "office-read"
+  ],
+  "args": [
+   {},
+   {
+    "path": "docs/r-jarvis.docx"
+   }
+  ]
+ },
+ {
+  "say": "скопируй docs/a.txt в archive/a.txt и покажи журнал",
+  "intent": "plan",
+  "tasks": [
+   "file-plan",
+   "audit"
+  ]
+ },
+ {
+  "say": "проверь браузер",
+  "intent": "plan",
+  "tasks": [
+   "browser-selftest"
+  ]
+ },
+ {
+  "say": "разреши сайт python.org",
+  "intent": "plan",
+  "tasks": [
+   "browser-allow-host"
+  ],
+  "args": [
+   {
+    "host": "python.org"
+   }
+  ]
+ },
+ {
+  "say": "открой сайт python.org",
+  "intent": "plan",
+  "tasks": [
+   "browser-read"
+  ],
+  "args": [
+   {
+    "url": "https://python.org/"
+   }
+  ]
+ },
+ {
+  "say": "напиши в блокноте «Купить молоко и хлеб»",
+  "intent": "plan",
+  "tasks": [
+   "notepad-open-if-needed",
+   "notepad-set-text"
+  ],
+  "args": [
+   {},
+   {
+    "text": "Купить молоко и хлеб"
+   }
+  ]
+ },
+ {
+  "say": "открой блокнот",
+  "intent": "plan",
+  "tasks": [
+   "notepad-open"
+  ]
+ },
+ {
+  "say": "проверь тестовое окно",
+  "intent": "plan",
+  "tasks": [
+   "windows-inspect"
+  ]
+ },
+ {
+  "say": "нажми кнопку в тестовом окне",
+  "intent": "plan",
+  "tasks": [
+   "windows-invoke-test"
+  ]
+ },
+ {
+  "say": "отмени последнее действие",
+  "intent": "plan",
+  "tasks": [
+   "rollback-last"
+  ]
+ },
+ {
+  "say": "удали docs/a.txt",
+  "intent": "refused"
+ },
+ {
+  "say": "запусти format c:",
+  "intent": "refused"
+ },
+ {
+  "say": "отправь письмо Ивану",
+  "intent": "refused"
+ },
+ {
+  "say": "свари кофе",
+  "intent": "unknown"
+ },
+ {
+  "say": "включи плейстейшн",
+  "intent": "plan",
+  "tasks": [
+   "media-ps5"
+  ]
+ },
+ {
+  "say": "Джарвис, запусти приставку",
+  "intent": "plan",
+  "tasks": [
+   "media-ps5"
+  ]
+ },
+ {
+  "say": "громкость 25",
+  "intent": "plan",
+  "tasks": [
+   "media-volume"
+  ],
+  "args": [
+   {
+    "level": 25
+   }
+  ]
+ },
+ {
+  "say": "сделай громче",
+  "intent": "plan",
+  "tasks": [
+   "media-volume"
+  ],
+  "args": [
+   {
+    "delta": 5
+   }
+  ]
+ },
+ {
+  "say": "тише на 3",
+  "intent": "plan",
+  "tasks": [
+   "media-volume"
+  ],
+  "args": [
+   {
+    "delta": -3
+   }
+  ]
+ },
+ {
+  "say": "выключи звук",
+  "intent": "plan",
+  "tasks": [
+   "media-mute"
+  ],
+  "args": [
+   {
+    "on": true
+   }
+  ]
+ },
+ {
+  "say": "басы больше",
+  "intent": "plan",
+  "tasks": [
+   "media-bass"
+  ],
+  "args": [
+   {
+    "delta": 2
+   }
+  ]
+ },
+ {
+  "say": "уровень баса 6",
+  "intent": "plan",
+  "tasks": [
+   "media-bass"
+  ],
+  "args": [
+   {
+    "level": 6
+   }
+  ]
+ },
+ {
+  "say": "убавь басы на 4",
+  "intent": "plan",
+  "tasks": [
+   "media-bass"
+  ],
+  "args": [
+   {
+    "delta": -4
+   }
+  ]
+ },
+ {
+  "say": "что на телевизоре",
+  "intent": "plan",
+  "tasks": [
+   "media-status"
+  ]
+ },
+ {
+  "say": "выключи телевизор",
+  "intent": "plan",
+  "tasks": [
+   "media-power"
+  ],
+  "args": [
+   {
+    "on": false
+   }
+  ]
+ },
+ {
+  "say": "включи плейстейшн и поставь громкость 20",
+  "intent": "plan",
+  "tasks": [
+   "media-ps5",
+   "media-volume"
+  ],
+  "args": [
+   {},
+   {
+    "level": 20
+   }
+  ]
+ },
+ {
+  "say": "режим игры",
+  "intent": "plan",
+  "tasks": [
+   "media-scene"
+  ],
+  "args": [
+   {
+    "name": "game"
+   }
+  ]
+ },
+ {
+  "say": "Джарвис, поиграем",
+  "intent": "plan",
+  "tasks": [
+   "media-scene"
+  ],
+  "args": [
+   {
+    "name": "game"
+   }
+  ]
+ },
+ {
+  "say": "включи режим кино",
+  "intent": "plan",
+  "tasks": [
+   "media-scene"
+  ],
+  "args": [
+   {
+    "name": "movie"
+   }
+  ]
+ },
+ {
+  "say": "спокойной ночи",
+  "intent": "plan",
+  "tasks": [
+   "media-scene"
+  ],
+  "args": [
+   {
+    "name": "night"
+   }
+  ]
+ }
+]

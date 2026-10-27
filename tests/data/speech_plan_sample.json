@@ -1,0 +1,21 @@
+{
+  "title": "Как ИИ меняет логистику",
+  "subtitle": "Конференция «Цифровая логистика» · 10 минут",
+  "speech": [
+    {"heading": "Крючок", "text": "Представьте склад, где ночью никто не работает, а утром все заказы уже собраны.\nЭто не будущее. Это вторник."},
+    {"heading": "Проблема", "text": "Сегодня большая часть времени диспетчера уходит на ручное планирование маршрутов."},
+    {"heading": "Решение", "text": "ИИ берёт рутину на себя, а человек принимает решения."},
+    {"heading": "Финал", "text": "Не ждите идеального момента. Начните с одного маршрута завтра."}
+  ],
+  "slides": [
+    {"kind": "title", "title": "Как ИИ меняет логистику", "subtitle": "Цифровая логистика 2026", "bullets": [], "number": "", "number_label": "", "quote": "", "author": "", "left_title": "", "left": [], "right_title": "", "right": [], "notes": "Представьте склад, где ночью никто не работает.", "image": "empty modern warehouse at night, soft blue light, robots"},
+    {"kind": "statement", "title": "Это не будущее. Это вторник.", "subtitle": "", "bullets": [], "number": "", "number_label": "", "quote": "", "author": "", "left_title": "", "left": [], "right_title": "", "right": [], "notes": "Это не будущее. Это вторник.", "image": ""},
+    {"kind": "section", "title": "Где мы теряем время", "subtitle": "Рутина, которую видно не сразу", "bullets": [], "number": "", "number_label": "", "quote": "", "author": "", "left_title": "", "left": [], "right_title": "", "right": [], "notes": "Давайте посмотрим, где уходит время.", "image": ""},
+    {"kind": "number", "title": "Время диспетчера на маршруты", "subtitle": "", "bullets": [], "number": "[уточнить]%", "number_label": "рабочего дня уходит на ручное планирование", "quote": "", "author": "", "left_title": "", "left": [], "right_title": "", "right": [], "notes": "Большая часть времени уходит на ручное планирование.", "image": ""},
+    {"kind": "bullets", "title": "Что берёт на себя ИИ", "subtitle": "", "bullets": ["Планирование маршрутов", "Прогноз загрузки склада", "Контроль сроков доставки", "Подсказки диспетчеру"], "number": "", "number_label": "", "quote": "", "author": "", "left_title": "", "left": [], "right_title": "", "right": [], "notes": "ИИ берёт рутину на себя.", "image": "dispatcher calmly looking at route map on large screen"},
+    {"kind": "compare", "title": "До и после", "subtitle": "", "bullets": [], "number": "", "number_label": "", "quote": "", "author": "", "left_title": "Сейчас", "left": ["Таблицы и звонки", "Решения по памяти", "Ошибки ночью"], "right_title": "С ИИ", "right": ["Маршрут за минуты", "Решения по данным", "Человек — главный"], "notes": "Сравним.", "image": ""},
+    {"kind": "quote", "title": "", "subtitle": "", "bullets": [], "number": "", "number_label": "", "quote": "Машина считает. Человек решает.", "author": "докладчик", "left_title": "", "left": [], "right_title": "", "right": [], "notes": "Машина считает, человек решает.", "image": ""},
+    {"kind": "closing", "title": "Начните с одного маршрута завтра", "subtitle": "Спасибо! Вопросы?", "bullets": [], "number": "", "number_label": "", "quote": "", "author": "", "left_title": "", "left": [], "right_title": "", "right": [], "notes": "Не ждите идеального момента.", "image": "delivery truck on empty road at sunrise"}
+  ],
+  "to_verify": ["Доля времени диспетчера на ручное планирование"]
+}

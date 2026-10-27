@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="JARVIS">
+<meta name="theme-color" content="#03070c">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icon-180.png">
+<link rel="stylesheet" href="/app.css">
+<title>JARVIS</title>
+</head>
+<body>
+<main id="setup" class="screen" hidden>
+  <div class="frame">
+    <div class="reactor" aria-hidden="true">
+      <div class="ring r1"></div><div class="ring r2"></div><div class="ring r3"></div><div class="ring r4"></div><div class="core"></div>
+    </div>
+    <div class="brand"><h1>JARVIS</h1><span class="hud">защищённая связь</span></div>
+    <p class="muted">Введите 6-значный код, который показал JARVIS на компьютере. Телефон читает данные и ставит запросы в очередь, но ничего не выполняет.</p>
+    <input id="key" type="password" inputmode="numeric" autocomplete="one-time-code" placeholder="код сопряжения">
+    <label class="check"><input id="remember" type="checkbox" checked> Запомнить на этом iPhone</label>
+    <button id="save" class="primary">Подключиться</button>
+    <p id="setup-msg" class="hud" aria-live="polite"></p>
+  </div>
+</main>
+
+<main id="app" class="screen" hidden>
+  <div class="brand"><h1>JARVIS</h1><span class="hud"><span id="dot" class="dot"></span><span id="conn">в сети</span></span></div>
+  <nav>
+    <button data-tab="station" class="tab on">Станция</button>
+    <button data-tab="summary" class="tab">Сводка</button>
+    <button data-tab="queue" class="tab">Очередь</button>
+    <button data-tab="audit" class="tab">Журнал</button>
+  </nav>
+
+  <section id="station" class="pane">
+    <div id="reactor" class="reactor" aria-hidden="true">
+      <div class="ring r1"></div><div class="ring r2"></div><div class="ring r3"></div><div class="ring r4"></div><div class="core"></div>
+      <div id="state" class="label hud">ожидание</div>
+    </div>
+    <p id="reply" class="reply" aria-live="polite">Готов. Скажите или напишите запрос.</p>
+    <div id="extra" class="extra"></div>
+    <form id="ask" class="frame">
+      <input id="say" maxlength="500" placeholder="например: статус" enterkeyhint="send" autocomplete="off">
+      <button class="primary" type="submit">Передать</button>
+      <label class="check"><input id="speak" type="checkbox" checked> Озвучивать ответы</label>
+      <label class="check"><input id="jarvisvoice" type="checkbox" checked> Голос JARVIS (с компьютера)</label>
+      <label class="check"><input id="awake" type="checkbox"> Режим станции: экран не гаснет</label>
+      <button id="briefing" type="button" class="soundtest">Брифинг</button>
+      <button id="soundtest" type="button" class="soundtest">Проверить звук</button>
+      <button id="pushon" type="button" class="soundtest">Включить уведомления</button>
+    </form>
+    <p class="hud">голос: микрофон на клавиатуре · или «Привет, Siri, Джарвис»</p>
+  </section>
+
+  <section id="summary" class="pane" hidden><div id="summary-body" class="cards"></div></section>
+  <section id="queue" class="pane" hidden><ul id="queue-list" class="list"></ul></section>
+  <section id="audit" class="pane" hidden><ul id="audit-list" class="list"></ul></section>
+
+  <footer><span class="hud">чтение · очередь · без удалённого запуска</span><button id="forget" class="link">Забыть ключ</button></footer>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>
