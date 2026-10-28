@@ -109,13 +109,14 @@
   - голос Gemini и переход на локальный голос без интернета;
   - выступление через Claude с презентациями (проверены через PowerPoint);
   - ответ из интернета через SearXNG, «что на экране» на реальном экране, запуск программы с проверкой окна;
-  - умный дом Яндекса на настоящих устройствах: розетка, лампочка, выключатель, яркость, тёплый свет и все четыре режима дома.
+  - умный дом Яндекса на настоящих устройствах: розетка, лампочка, выключатель, яркость, тёплый свет и все четыре режима дома;
+  - диктовка по F9 в Блокнот и Telegram с возвратом буфера обмена.
 - Ещё не проверено:
   - влияет ли регулировка басов на HT-S400;
   - живая команда «Эй, Джарвис»;
   - push на настоящий iPhone;
   - картинки из Gemini (нужен платный тариф) и Pexels (нужен ключ);
-  - живые диктовка и перебивание.
+  - живое перебивание голосом.
 
 ### Где что лежит
 Код: [`developer_core/jarvis_local/`](developer_core/jarvis_local/) · Функции 1–12: [`docs/JARVIS_FEATURES_1_12_RU.md`](docs/JARVIS_FEATURES_1_12_RU.md) · Телефон: [`docs/PHONE_STATION_RU.md`](docs/PHONE_STATION_RU.md) · Сторонние компоненты: [`NOTICE.md`](NOTICE.md)
@@ -217,13 +218,14 @@ Features that need them report "not installed".
   - the Gemini voice and the offline local-voice fallback;
   - a Claude-written talk with decks (checked in PowerPoint);
   - an internet answer via SearXNG, "what's on my screen" on the real screen, and an app launch with window check;
-  - Yandex smart home on real devices: socket, bulb, wall switch, brightness, warm white and all four home routines.
+  - Yandex smart home on real devices: socket, bulb, wall switch, brightness, warm white and all four home routines;
+  - F9 dictation into Notepad and Telegram, clipboard restored.
 - Not yet verified:
   - whether the bass setting affects the HT-S400;
   - a live "Hey JARVIS";
   - push on a real iPhone;
   - pictures from Gemini (paid tier needed) and Pexels (key needed);
-  - live dictation and barge-in.
+  - live barge-in.
 
 ### Where things are
 Code: [`developer_core/jarvis_local/`](developer_core/jarvis_local/) · Third-party components: [`NOTICE.md`](NOTICE.md) · License: [`LICENSE`](LICENSE)
