@@ -511,5 +511,200 @@
     "name": "night"
    }
   ]
+ },
+ {
+  "say": "напомни через 20 минут выключить духовку",
+  "intent": "plan",
+  "tasks": [
+   "reminder-add"
+  ]
+ },
+ {
+  "say": "поставь таймер на 5 минут",
+  "intent": "plan",
+  "tasks": [
+   "reminder-add"
+  ]
+ },
+ {
+  "say": "напоминай каждую пятницу в 10 про отчёт",
+  "intent": "plan",
+  "tasks": [
+   "reminder-add"
+  ]
+ },
+ {
+  "say": "какие у меня напоминания",
+  "intent": "plan",
+  "tasks": [
+   "reminder-list"
+  ]
+ },
+ {
+  "say": "отмени напоминание про духовку",
+  "intent": "plan",
+  "tasks": [
+   "reminder-cancel"
+  ],
+  "args": [
+   {
+    "what": "духовку"
+   }
+  ]
+ },
+ {
+  "say": "поставь на паузу",
+  "intent": "plan",
+  "tasks": [
+   "music"
+  ],
+  "args": [
+   {
+    "action": "pause"
+   }
+  ]
+ },
+ {
+  "say": "следующий трек",
+  "intent": "plan",
+  "tasks": [
+   "music"
+  ],
+  "args": [
+   {
+    "action": "next"
+   }
+  ]
+ },
+ {
+  "say": "что сейчас играет",
+  "intent": "plan",
+  "tasks": [
+   "music-status"
+  ]
+ },
+ {
+  "say": "погаси свет на кухне",
+  "intent": "plan",
+  "tasks": [
+   "home-switch"
+  ]
+ },
+ {
+  "say": "свет на 40%",
+  "intent": "plan",
+  "tasks": [
+   "home-brightness"
+  ]
+ },
+ {
+  "say": "запусти сценарий кино",
+  "intent": "plan",
+  "tasks": [
+   "home-scenario"
+  ],
+  "args": [
+   {
+    "name": "кино"
+   }
+  ]
+ },
+ {
+  "say": "найди в интернете курс доллара",
+  "intent": "plan",
+  "tasks": [
+   "web-answer"
+  ],
+  "args": [
+   {
+    "question": "курс доллара"
+   }
+  ]
+ },
+ {
+  "say": "что у меня на экране",
+  "intent": "plan",
+  "tasks": [
+   "screen-describe"
+  ]
+ },
+ {
+  "say": "открой папку загрузки",
+  "intent": "plan",
+  "tasks": [
+   "app-open"
+  ],
+  "args": [
+   {
+    "target": "загрузки"
+   }
+  ]
+ },
+ {
+  "say": "открой второй файл",
+  "intent": "plan",
+  "tasks": [
+   "file-open"
+  ],
+  "args": [
+   {
+    "index": 2
+   }
+  ]
+ },
+ {
+  "say": "сверни все окна",
+  "intent": "plan",
+  "tasks": [
+   "desktop-show"
+  ]
+ },
+ {
+  "say": "Джарвис, я дома",
+  "intent": "plan",
+  "tasks": [
+   "home-routine"
+  ],
+  "args": [
+   {
+    "name": "home"
+   }
+  ]
+ },
+ {
+  "say": "я ушёл",
+  "intent": "plan",
+  "tasks": [
+   "home-routine"
+  ],
+  "args": [
+   {
+    "name": "away"
+   }
+  ]
+ },
+ {
+  "say": "доброе утро",
+  "intent": "plan",
+  "tasks": [
+   "home-routine"
+  ],
+  "args": [
+   {
+    "name": "morning"
+   }
+  ]
+ },
+ {
+  "say": "Добрый вечер",
+  "intent": "plan",
+  "tasks": [
+   "home-routine"
+  ],
+  "args": [
+   {
+    "name": "evening"
+   }
+  ]
  }
 ]

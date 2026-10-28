@@ -97,6 +97,14 @@ class Briefing:
         hobbies = [f['text'] for f in profile.get('facts', []) if f['kind'] == 'hobby']
         if hobbies and now.weekday() >= 5:  # weekends: a nod to what the user loves
             parts.append('Выходной — отличный повод для: %s.' % hobbies[now.toordinal() % len(hobbies)])
+        try:
+            today = [i for i in self.r.reminders.items()
+                     if datetime.datetime.fromisoformat(i['due']).date() == now.date()]
+        except Exception:
+            today = []
+        if today:
+            parts.append('Напоминания на сегодня: %s.' % '; '.join(
+                '%s — %s' % (i['due'][11:16], i['text']) for i in today[:4]))
         pending = [i for i in self.r.phone_queue_items() if i['status'] == 'pending' and not i.get('auto')]
         if pending:
             parts.append('С телефона ждут %d запрос(а). Первый: %s.' % (len(pending), pending[0]['text'][:80]))

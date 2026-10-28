@@ -38,6 +38,13 @@ TASKS = {
     'pc-find': 'write', 'pc-send': 'write', 'pc-clip-get': 'write', 'pc-clip-set': 'write', 'pc-screen': 'write',
     'profile-show': 'read', 'profile-remember': 'write', 'profile-forget': 'write', 'profile-style': 'write',
     'speech-create': 'write',  # sends the topic to Claude (paid), writes new files only
+    'reminder-add': 'write', 'reminder-list': 'read', 'reminder-cancel': 'write',  # speak/push only, never execute
+    'music': 'write', 'music-status': 'read',  # any PC player via Windows media controls
+    'home-devices': 'read', 'home-switch': 'write', 'home-brightness': 'write', 'home-scenario': 'write',  # Yandex
+    'home-routine': 'write',  # fixed routines: lights/sockets via Yandex, TV off, speaker via a Yandex scenario
+    'screen-describe': 'write',  # local vision model reads the screen; approval like other pc-* tasks
+    'web-answer': 'write',  # the question leaves the PC (own SearXNG -> search engines); answer is text only
+    'app-open': 'write', 'file-open': 'write', 'desktop-show': 'write', 'windows-list': 'read',  # allowlisted apps
 }
 
 
@@ -173,8 +180,27 @@ class UnifiedTaskRouter:
     def _media_ps5(self):
         return self.media.ps5(self.session)
 
+    SCENE_LIGHTS = {'movie': 20, 'game': 40, 'night': 0}  # brightness %, 0 = all lights off
+
     def _media_scene(self, name):
-        return self.media.scene(name, self.session)
+        result = self.media.scene(name, self.session)
+        level = self.SCENE_LIGHTS.get(name)
+        try:
+            from .yandex_iot import keys as yandex_keys
+            if level is None or not (hasattr(self, '_yandex') or yandex_keys().configured()):
+                return result
+            lights = [d for d in self.yandex.info()['devices'] if d['kind'] == 'light']
+            if not lights:
+                return result
+            done, failed = self.yandex.act(lights, on=False) if level == 0 else                 self.yandex.act(lights, on=True, brightness=level)
+            self.ws.journal.record('scene-lights', 'PASS' if done and not failed else 'WARN', scene=name, level=level,
+                                   devices=done, failed=failed, rollback=[])
+            if done:
+                result['speech'] = result['speech'].rstrip() + (' Свет выключен.' if level == 0 else
+                                                                ' Свет приглушён до %d%%.' % level)
+        except Exception as exc:  # lights are a bonus: the TV part of the scene already happened
+            self.ws.journal.record('scene-lights', 'FAILED', scene=name, reason=type(exc).__name__, rollback=[])
+        return result
 
     def _pc(self, task, fn):
         """pc-* tasks reach the phone, so even reads go through an approval (allowlist or keyboard)."""
@@ -195,6 +221,52 @@ class UnifiedTaskRouter:
 
     def _pc_clip_set(self, text):
         return self._pc('pc-clip-set', lambda pc: pc.clip_set(text))
+
+    def _screen_describe(self, question=''):
+        def run(pc):
+            from PIL import ImageGrab
+            from .screen_vision import describe, png_of
+            grab = pc.grab or (lambda: ImageGrab.grab(all_screens=False))
+            png = png_of(grab())
+            text = getattr(self, 'vision', describe)(png, question)
+            link = pc._publish(data=png, name='screen-%s.png' % __import__('datetime').datetime.now().strftime('%Y%m%d-%H%M%S'))
+            self.ws.journal.record('screen-describe', 'PASS', chars=len(text), rollback=[])
+            return {'status': 'PASS', 'speech': text, 'text': text, 'link': link}
+        return self._pc('screen-describe', run)
+
+    @property
+    def apps(self):
+        if not hasattr(self, '_apps'):
+            from .apps import Apps
+            self._apps = Apps(self.ws)
+        return self._apps
+
+    def _app_open(self, target):
+        from .apps import resolve
+        kind, value, _ = resolve(target)  # refuse before asking for approval
+        self.session.confirm({'task': 'app-open', 'kind': kind, 'target': target[:40]})
+        return self.apps.open(target)
+
+    def _file_open(self, index):
+        self.session.confirm({'task': 'file-open', 'index': index})
+        return self.apps.open_found(index)
+
+    def _desktop_show(self):
+        self.session.confirm({'task': 'desktop-show'})
+        return self.apps.show_desktop()
+
+    def _windows_list(self):
+        return self.apps.windows()
+
+    def _web_answer(self, question):
+        self.session.confirm({'task': 'web-answer', 'question': question[:200], 'sent_to': 'SearXNG -> search engines'})
+        answer = getattr(self, 'web', None)
+        if answer is None:
+            from .web_answer import answer
+        result = answer(question)
+        self.ws.journal.record('web-answer', 'PASS', chars=len(question), sources=[s['url'] for s in result['sources']],
+                               rollback=[])
+        return result
 
     def _pc_screen(self):
         return self._pc('pc-screen', lambda pc: pc.screen())
@@ -236,6 +308,159 @@ class UnifiedTaskRouter:
             from .claude_writer import speech_plan as planner
         plan = planner(topic, minutes, audience=audience, tone=tone, notes=notes)
         return create(self.ws, plan, minutes, themes=tuple(themes), image_providers=images)
+
+    @property
+    def reminders(self):
+        from .reminders import Reminders
+        return Reminders(self.ws.state)
+
+    def _reminder_add(self, phrase):
+        from .reminders import parse, when_words
+        parsed = parse(phrase)
+        if parsed is None:
+            raise Denied('Не понял время напоминания: скажите «через 20 минут …» или «в 18:30 …»')
+        self.session.confirm({'task': 'reminder-add', 'text': parsed['text'], 'due': parsed['due'].isoformat(),
+                              'repeat': parsed['repeat']})
+        item = self.reminders.add(parsed)
+        self.ws.journal.record('reminder-add', 'PASS', reminder=item['id'], due=item['due'], repeat=item['repeat'],
+                               rollback=[])
+        every = 'каждый день, начиная ' if item['repeat'] == 'daily' else 'каждую неделю, начиная ' if item['repeat'] else ''
+        return {'status': 'PASS', 'reminder': item,
+                'speech': 'Напомню %s%s: %s.' % (every, when_words(parsed['due']), item['text'])}
+
+    def _reminder_list(self):
+        import datetime
+        from .reminders import when_words
+        items = self.reminders.items()
+        if not items:
+            return {'status': 'PASS', 'items': [], 'speech': 'Напоминаний нет.'}
+        parts = ['%s — %s' % (when_words(datetime.datetime.fromisoformat(i['due'])), i['text']) for i in items[:5]]
+        return {'status': 'PASS', 'items': items,
+                'speech': 'Напоминаний: %d. %s.' % (len(items), '; '.join(parts))}
+
+    def _reminder_cancel(self, what=''):
+        self.session.confirm({'task': 'reminder-cancel', 'what': what})
+        n = self.reminders.cancel(what)
+        self.ws.journal.record('reminder-cancel', 'PASS', cancelled=n, rollback=[])
+        return {'status': 'PASS', 'cancelled': n,
+                'speech': ('Отменил напоминаний: %d.' % n) if n else 'Таких напоминаний нет.'}
+
+    @property
+    def music_pc(self):
+        if not hasattr(self, '_music_pc'):
+            from .media_pc import MediaPC
+            self._music_pc = MediaPC()
+        return self._music_pc
+
+    def _music(self, action):
+        self.session.confirm({'task': 'music', 'action': action})
+        result = self.music_pc.control(action)
+        self.ws.journal.record('music', result['status'], action=action, rollback=[])
+        return result
+
+    def _music_status(self):
+        return self.music_pc.now_playing()
+
+    @property
+    def yandex(self):
+        if not hasattr(self, '_yandex'):
+            from .yandex_iot import YandexHome
+            self._yandex = YandexHome()
+        return self._yandex
+
+    def _home_devices(self):
+        info = self.yandex.info()
+        lit = [d['name'] for d in info['devices'] if d['kind'] and d['on']]
+        names = ', '.join('%s%s' % (d['name'], ' (вкл)' if d['on'] else '') for d in info['devices'] if d['kind'])
+        return {'status': 'PASS', **info,
+                'speech': ('Устройства: %s.' % names if names else 'Света и розеток в умном доме не нашёл.') +
+                          (' Сейчас включено: %s.' % ', '.join(lit) if lit else '')}
+
+    def _home_act(self, task, phrase, **change):
+        info = self.yandex.info()
+        devices = self.yandex.pick(phrase, info['devices'])
+        if not devices:
+            raise Denied('Не понял, какое устройство: назовите его как в приложении «Дом с Алисой»')
+        self.session.confirm({'task': task, 'devices': [d['name'] for d in devices], **change})
+        done, failed = self.yandex.act(devices, **change)
+        self.ws.journal.record(task, 'PASS' if done and not failed else 'WARN', devices=done, failed=failed,
+                               rollback=[], **change)
+        if 'brightness' in change:
+            speech = 'Яркость %d%%: %s.' % (change['brightness'], ', '.join(done)) if done else ''
+        else:
+            speech = '%s: %s.' % ('Включил' if change.get('on') else 'Выключил', ', '.join(done)) if done else ''
+        if failed:
+            speech += ' Не ответили: %s.' % ', '.join(failed)
+        return {'status': 'PASS' if done and not failed else 'WARN', 'done': done, 'failed': failed,
+                'speech': speech.strip() or 'Устройства не подтвердили команду.'}
+
+    def _home_switch(self, phrase, on):
+        return self._home_act('home-switch', phrase, on=bool(on))
+
+    def _home_brightness(self, phrase, level):
+        if type(level) is not int or not 1 <= level <= 100:
+            raise Denied('Яркость 1..100')
+        return self._home_act('home-brightness', phrase, on=True, brightness=level)
+
+    def _home_scenario(self, name):
+        scenarios = self.yandex.info()['scenarios']
+        hit = [s for s in scenarios if s['name'].lower() == name.lower()] or \
+              [s for s in scenarios if name.lower() in s['name'].lower()]
+        if len(hit) != 1:
+            raise Denied('Сценарий не найден. Есть: ' + ', '.join(s['name'] for s in scenarios)[:200])
+        self.session.confirm({'task': 'home-scenario', 'scenario': hit[0]['name']})
+        self.yandex.scenario(hit[0]['id'])
+        self.ws.journal.record('home-scenario', 'PASS', scenario=hit[0]['name'], rollback=[])
+        return {'status': 'PASS', 'speech': 'Сценарий «%s» запущен.' % hit[0]['name']}
+
+    # name -> (Yandex scenario with the speaker part, what the lights do, speaker part for the reply)
+    ROUTINES = {
+        'home': ('Я дома', {'on': True}, 'включила музыку'),
+        'away': ('Я ушёл', None, ''),  # everything off + TV
+        'morning': ('Доброе утро', {'on': True, 'brightness': 30}, 'поставила громкость 4 и ваш плейлист'),
+        'evening': ('Вечер добрый', {'on': True, 'brightness': 60, 'temperature': 2700}, ''),
+    }
+
+    def _home_routine(self, name):
+        if name not in self.ROUTINES:
+            raise Denied('Unknown routine')
+        title, lights, speaker = self.ROUTINES[name]
+        info = self.yandex.info()
+        if lights is None:
+            targets, change = [d for d in info['devices'] if d['kind']], {'on': False}
+        else:  # the dimmable bulbs; plain switches only when there is no bulb at all
+            lamps = [d for d in info['devices'] if d['kind'] == 'light']
+            targets, change = [d for d in lamps if d['brightness']] or lamps, lights
+        self.session.confirm({'task': 'home-routine', 'routine': name, 'devices': [d['name'] for d in targets]})
+        done, failed = self.yandex.act(targets, **change) if targets else ([], [])
+        norm = lambda s: s.lower().replace('ё', 'е')
+        hit = [s for s in info['scenarios'] if norm(s['name']) == norm(title)]
+        if hit:
+            self.yandex.scenario(hit[0]['id'])
+        tv = False
+        if name == 'away':
+            try:
+                self._media_power(False)
+                tv = True
+            except Exception:  # no TV configured or it is already off: the house part already happened
+                pass
+        self.ws.journal.record('home-routine', 'PASS' if not failed else 'WARN', routine=name, devices=done,
+                               failed=failed, scenario=bool(hit), tv_off=tv, rollback=[])
+        if lights is None:
+            speech = 'Выключил: %s.' % ', '.join(done + (['Телевизор'] if tv else [])) if done or tv else ''
+        else:
+            speech = '%s: %s.' % ('Свет %d%%' % lights['brightness'] if 'brightness' in lights else 'Включил',
+                                   ', '.join(done)) if done else ''
+            if lights.get('temperature') and done:
+                speech += ' Тёплый оттенок.'
+        if failed:
+            speech += ' Не ответили: %s.' % ', '.join(failed)
+        if hit:
+            speech += ' Сценарий «%s» запущен.' % hit[0]['name']
+        elif speaker:
+            speech += ' Чтобы колонка %s, создайте сценарий «%s» в «Доме с Алисой».' % (speaker, title)
+        return {'status': 'PASS' if not failed else 'WARN', 'done': done, 'failed': failed, 'scenario': bool(hit),
+                'speech': speech.strip() or 'Нечего было переключать.'}
 
     def phone_queue_items(self):
         return PhoneQueue(self.ws).items()

@@ -170,4 +170,6 @@ footer { display: flex; justify-content: space-between; align-items: center; mar
 .extra pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 40vh; overflow: auto; margin: 0;
   font: 14px/1.4 var(--mono); background: rgba(3, 12, 20, .8); border: 1px solid var(--line); border-radius: 4px; padding: 12px; }
 .extra img { width: 100%; border: 1px solid var(--line); border-radius: 4px; }
+.chips { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 10px; }
+.chips button { min-height: 44px; padding: 6px 4px; font: 600 13px var(--hud); letter-spacing: .03em; color: var(--cyan2); }
 .soundtest { width: 100%; margin-top: 6px; font: 600 14px var(--hud); letter-spacing: .06em; color: var(--cyan2); }

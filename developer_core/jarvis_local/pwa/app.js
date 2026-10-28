@@ -328,6 +328,10 @@ if (new URLSearchParams(location.search).get('briefing') === '1') {
   setTimeout(() => api('/api/briefing').then((b) => { $('reply').textContent = b.text; }).catch(() => {}), 800);
 }
 
+document.querySelectorAll('.chips [data-phrase]').forEach((b) => {
+  b.onclick = () => { $('say').value = b.dataset.phrase; ask({ preventDefault() {} }); };
+});
+
 $('soundtest').onclick = () => {
   $('speak').checked = true;
   unlockSpeech();

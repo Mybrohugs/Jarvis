@@ -15,7 +15,13 @@ from .session import Denied, TrustedLocalSession
 
 ALLOWED = ('media-volume', 'media-mute', 'media-scene',
            'pc-find', 'pc-send', 'pc-clip-get', 'pc-clip-set', 'pc-screen',  # 7, 9, 10: user-authorised
-           'profile-remember', 'profile-forget', 'profile-style', 'profile-show')  # the user's own profile
+           'profile-remember', 'profile-forget', 'profile-style', 'profile-show',  # the user's own profile
+           'reminder-add', 'reminder-list', 'reminder-cancel',  # speak/push only
+           'music', 'music-status',  # PC player: pause/play/next/previous
+           'home-devices', 'home-switch', 'home-brightness', 'home-scenario', 'home-routine',  # Yandex lights/sockets
+           'screen-describe',  # local vision model, the picture stays on the PC
+           'web-answer',  # own SearXNG + local summary
+           'app-open', 'file-open', 'desktop-show', 'windows-list')  # allowlisted apps, folders, sites
 PROFILE_KINDS = ('name', 'hobby', 'like', 'dislike', 'fact')
 
 
@@ -45,6 +51,48 @@ def validate(auto):
         if set(args) != {'style'} or args['style'] not in ('short', 'detailed'):
             raise Denied('Bad style')
         return task, {'style': args['style']}
+    if task == 'reminder-add':
+        if set(args) != {'phrase'} or not isinstance(args['phrase'], str) or not 3 <= len(args['phrase']) <= 300:
+            raise Denied('Bad reminder')
+        return task, {'phrase': args['phrase']}
+    if task == 'reminder-cancel':
+        if set(args) - {'what'} or not isinstance(args.get('what', ''), str) or len(args.get('what', '')) > 100:
+            raise Denied('Bad reminder cancel')
+        return task, {'what': args.get('what', '')}
+    if task == 'music':
+        from .media_pc import ACTIONS
+        if set(args) != {'action'} or args['action'] not in ACTIONS:
+            raise Denied('Bad music action')
+        return task, {'action': args['action']}
+    if task in ('home-switch', 'home-brightness'):
+        want = {'phrase', 'on'} if task == 'home-switch' else {'phrase', 'level'}
+        if set(args) != want or not isinstance(args['phrase'], str) or not 2 <= len(args['phrase']) <= 200:
+            raise Denied('Bad home command')
+        if task == 'home-switch' and type(args['on']) is not bool:
+            raise Denied('Bad on/off')
+        if task == 'home-brightness' and (type(args['level']) is not int or not 1 <= args['level'] <= 100):
+            raise Denied('Bad brightness')
+        return task, dict(args)
+    if task == 'home-scenario':
+        if set(args) != {'name'} or not isinstance(args['name'], str) or not 1 <= len(args['name']) <= 60:
+            raise Denied('Bad scenario')
+        return task, {'name': args['name']}
+    if task == 'home-routine':
+        if set(args) != {'name'} or args['name'] not in ('home', 'away', 'morning', 'evening'):
+            raise Denied('Bad routine')
+        return task, {'name': args['name']}
+    if task == 'home-devices':
+        if args:
+            raise Denied('No arguments expected')
+        return task, {}
+    if task == 'music-status':
+        if args:
+            raise Denied('No arguments expected')
+        return task, {}
+    if task == 'reminder-list':
+        if args:
+            raise Denied('No arguments expected')
+        return task, {}
     if task == 'profile-show':
         if args:
             raise Denied('No arguments expected')
@@ -57,6 +105,26 @@ def validate(auto):
         if set(args) != {'index'} or type(args['index']) is not int or not 1 <= args['index'] <= 10:
             raise Denied('Bad file number')
         return task, {'index': args['index']}
+    if task == 'app-open':
+        if set(args) != {'target'} or not isinstance(args['target'], str) or not 1 <= len(args['target']) <= 40:
+            raise Denied('Bad app')
+        return task, {'target': args['target']}
+    if task == 'file-open':
+        if set(args) != {'index'} or type(args['index']) is not int or not 1 <= args['index'] <= 10:
+            raise Denied('Bad file number')
+        return task, {'index': args['index']}
+    if task in ('desktop-show', 'windows-list'):
+        if args:
+            raise Denied('No arguments expected')
+        return task, {}
+    if task == 'web-answer':
+        if set(args) != {'question'} or not isinstance(args['question'], str) or not 2 <= len(args['question']) <= 300:
+            raise Denied('Bad question')
+        return task, {'question': args['question']}
+    if task == 'screen-describe':
+        if set(args) - {'question'} or not isinstance(args.get('question', ''), str) or len(args.get('question', '')) > 300:
+            raise Denied('Bad screen question')
+        return task, {'question': args.get('question', '')}
     if task in ('pc-clip-get', 'pc-screen'):
         if args:
             raise Denied('No arguments expected')
@@ -82,7 +150,8 @@ def validate(auto):
 
 def speech_for(task, result):
     after = result.get('after') or {}
-    if task == 'media-scene' or task.startswith(('pc-', 'profile-')):
+    if task == 'media-scene' or task.startswith(('pc-', 'profile-', 'reminder-', 'music', 'home-', 'screen-', 'web-',
+                                                  'app-', 'file-open', 'desktop-', 'windows-list')):
         return result.get('speech') or 'Готово.'
     if result.get('status') != 'PASS':
         return 'Команда отправлена, но телевизор не подтвердил результат.'
@@ -232,11 +301,38 @@ class PhoneExecutor:
         except Exception:
             pass  # no subscribed phone yet: the briefing is still available in the app
 
+    def fire_reminders(self, now=None, speak=None):
+        """Due reminders: say them aloud at the PC (JARVIS voice) and push them to the phone."""
+        fired = self.router.reminders.due(now)
+        for item in fired:
+            text = 'Сэр, напоминаю: %s.' % item['text'].rstrip('.')
+            try:
+                text = self.router.profile.adapt(text)
+            except Exception:
+                pass
+            if speak is None:
+                from .voice_loop import say
+                speak = say
+            try:
+                speak(text)
+            except Exception:
+                pass
+            self._push('Напоминание', item['text'][:180], '/')
+            self.router.ws.journal.record('reminder-fired', 'PASS', reminder=item['id'], repeat=item.get('repeat'),
+                                          rollback=[])
+        return fired
+
     def run(self, interval=0.5):
-        last_sched = 0
+        last_sched = last_remind = 0
         while True:
             self.tick()
             self.heartbeat()
+            if time.monotonic() - last_remind > 5:
+                last_remind = time.monotonic()
+                try:
+                    self.fire_reminders()
+                except Exception as exc:
+                    print('reminder error:', type(exc).__name__, str(exc)[:200], flush=True)
             if time.monotonic() - last_sched > 30:
                 last_sched = time.monotonic()
                 try:

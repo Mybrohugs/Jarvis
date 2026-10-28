@@ -20,6 +20,11 @@ JARVIS Local использует перечисленные компонент�
 | Playwright / Chromium (optional) | page reading | Apache-2.0 / BSD |
 | Everything (voidtools) | disk search | voidtools license |
 | Tailscale | private network to the iPhone | Tailscale terms |
+| SearXNG (own Docker container, not bundled) | internet answers | AGPL-3.0 |
+| Qwen2.5-VL 3B via Ollama | "what's on my screen" | Qwen license / Apache-2.0 |
+| Yandex Smart Home API | lights, sockets, scenarios | Yandex terms |
+| keyboard (Python) | hold-to-dictate | MIT |
+| winrt Python projections | music in any player | MIT |
 
-Sony, Bravia, PlayStation, iPhone, Windows, Word, Excel and PowerPoint are trademarks of their owners.
+Sony, Bravia, PlayStation, Yandex, Alice, iPhone, Windows, Word, Excel and PowerPoint are trademarks of their owners.
 JARVIS is a character name used here as a nickname; this project is not affiliated with Marvel or Disney.

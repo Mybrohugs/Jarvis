@@ -124,26 +124,105 @@ def record_phrase(stream_read, max_s=8.0, silence_s=0.8, min_s=0.6):
     return np.concatenate(frames)
 
 
+class SoundDevicePlayer:
+    def play(self, data):
+        import io
+        import wave
+        import sounddevice as sd
+        with wave.open(io.BytesIO(data)) as w:
+            rate, width, channels = w.getframerate(), w.getsampwidth(), w.getnchannels()
+            pcm = np.frombuffer(w.readframes(w.getnframes()), dtype='<i2' if width == 2 else np.uint8)
+        x = pcm.reshape(-1, channels) if channels > 1 else pcm
+        sd.play(x, rate)
+
+    def active(self):
+        import sounddevice as sd
+        try:
+            return sd.get_stream().active
+        except RuntimeError:
+            return False
+
+    def stop(self):
+        import sounddevice as sd
+        sd.stop()
+
+
+class BargeInSpeaker:
+    """Speaks while still listening: "Эй, Джарвис" during a reply stops it and starts a new command.
+    Only the wake word interrupts (a plain "стоп" is too easily confused with JARVIS's own echo)."""
+
+    def __init__(self, read, wake, fetch=fetch_speech, player=None, threshold=WAKE_THRESHOLD):
+        self.read, self.wake, self.fetch = read, wake, fetch
+        self.player = player or SoundDevicePlayer()
+        self.threshold, self.interrupted = threshold, False
+
+    def __call__(self, text):
+        print('JARVIS:', text, flush=True)
+        if self.interrupted:  # the owner already cut in: stay quiet until the next command
+            return False
+        try:
+            data = self.fetch(text)
+        except Exception:
+            return False
+        self.player.play(data)
+        while self.player.active():
+            if max(self.wake.predict(self.read()).values()) >= self.threshold:
+                self.player.stop()
+                self.wake.reset()
+                self.interrupted = True
+                print('(перебили)', flush=True)
+                break
+        return True
+
+
 def main():
     ap = argparse.ArgumentParser(description='"Эй, Джарвис" voice loop at the PC')
     ap.add_argument('--workspace', required=True)
     ap.add_argument('--whisper', default='small')
+    ap.add_argument('--dictation-key', default='f9', help='hold to dictate into the active window; "" turns it off')
     a = ap.parse_args()
     import sounddevice as sd
     from faster_whisper import WhisperModel
     from openwakeword.model import Model
     wake = Model(wakeword_models=['hey_jarvis'], inference_framework='onnx')
     stt = WhisperModel(a.whisper, device='cpu', compute_type='int8', cpu_threads=4)
-    assistant = VoiceAssistant(a.workspace)
     stream = sd.InputStream(samplerate=RATE, channels=1, dtype='int16', blocksize=FRAME)
     stream.start()
     read = lambda: stream.read(FRAME)[0][:, 0].copy()  # noqa: E731
-    print('VOICE LOOP ready: say "Эй, Джарвис"', flush=True)
+    speaker = BargeInSpeaker(read, wake)
+    assistant = VoiceAssistant(a.workspace, speak=speaker)
+    held = None
+    if a.dictation_key:
+        try:
+            import keyboard
+            from .dictation import Dictation
+
+            def transcribe(audio):
+                return ' '.join(s.text for s in stt.transcribe(audio, language='ru', beam_size=3, vad_filter=True)[0])
+            dictation = Dictation(transcribe, assistant.router.ws.state, assistant.router.ws.journal)
+            held = lambda: keyboard.is_pressed(a.dictation_key)  # noqa: E731
+        except ImportError:
+            print('dictation off: pip install keyboard', flush=True)
+    print('VOICE LOOP ready: say "Эй, Джарвис"' + (' | hold %s to dictate' % a.dictation_key.upper() if held else ''),
+          flush=True)
     while True:
-        chunk = read()
-        scores = wake.predict(chunk)
-        if max(scores.values()) < WAKE_THRESHOLD:
+        if held is not None and held():
+            frames = []
+            while held():
+                frames.append(read())
+            try:
+                text = dictation.finish(np.concatenate(frames).astype(np.float32) / 32768)
+                print('ДИКТОВКА:', len(text or ''), 'символов', flush=True)
+            except Exception as exc:
+                print('dictation error:', type(exc).__name__, str(exc)[:200], flush=True)
+            wake.reset()
             continue
+        if not speaker.interrupted:  # after an interruption the wake word was already heard
+            chunk = read()
+            scores = wake.predict(chunk)
+            if max(scores.values()) < WAKE_THRESHOLD:
+                continue
+        speaker.interrupted = False
         beep()
         audio = record_phrase(read).astype(np.float32) / 32768
         wake.reset()

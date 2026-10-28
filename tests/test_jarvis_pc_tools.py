@@ -91,7 +91,8 @@ class PCToolsTests(unittest.TestCase):
         self.assertEqual(phone_quick_command('что в буфере'), {'task': 'pc-clip-get', 'args': {}})
         self.assertEqual(phone_quick_command('вставь в буфер «Привет, мир»'),
                          {'task': 'pc-clip-set', 'args': {'text': 'Привет, мир'}})
-        self.assertEqual(phone_quick_command('что на экране?'), {'task': 'pc-screen', 'args': {}})
+        self.assertEqual(phone_quick_command('что на экране?'), {'task': 'screen-describe', 'args': {}})
+        self.assertEqual(phone_quick_command('сделай скриншот'), {'task': 'pc-screen', 'args': {}})
 
     def test_phone_executor_runs_clipboard_and_read_only_cli_cannot(self):
         router = UnifiedTaskRouter(TrustedLocalSession.phone_allowlist(('pc-clip-get',)), self.ws.root)

@@ -58,10 +58,14 @@ class Daily(unittest.TestCase):
         class P:
             stdout = json.dumps({'BackendState': 'Running', 'Peer': {'x': {'OS': 'iOS', 'Online': True}}})
         self.router.files.capability = lambda: {'v8_available': True, 'office_worker_ready': True}
-        d = Doctor(self.router, run=lambda *a, **k: P(), http_ok=lambda port, path: 200 if port == 10790 else 503)
+        d = Doctor(self.router, run=lambda *a, **k: P(), http_ok=lambda port, path: 200 if port in (10790, 8888) else 503,
+                   models=lambda: ['qwen3:8b'], keys={'Gemini': True, 'Claude': False})
         r = d.report()
         by = {c['name']: c['status'] for c in r['checks']}
         self.assertEqual((by['Шлюз iPhone'], by['Голос'], by['Телевизор'], by['Tailscale']), ('PASS', 'FAIL', 'PASS', 'PASS'))
+        self.assertEqual((by['Поиск'], by['Модели'], by['Ключи']), ('PASS', 'WARN', 'WARN'))
+        fixes = {c['name']: c['fix'] for c in r['checks']}
+        self.assertEqual(fixes['Модели'], 'ollama pull qwen2.5vl:3b')
         self.assertIn('Голос', r['summary'])
         self.assertEqual(r['status'], 'FAIL')
 
@@ -76,6 +80,9 @@ class Daily(unittest.TestCase):
         self.assertTrue(out['text'].endswith('Все системы в норме.'))
         saved = json.loads((self.router.ws.state / 'briefing_latest.json').read_text(encoding='utf-8'))
         self.assertEqual(saved['text'], out['text'])
+        from developer_core.jarvis_local.reminders import parse
+        self.router.reminders.add(parse('напомни в 18:30 забрать посылку', datetime.datetime(2026, 10, 27, 8, 0)))
+        self.assertIn('Напоминания на сегодня: 18:30 — забрать посылку.', b.build()['text'])
 
     def test_briefing_without_city_or_network(self):
         def broken(url):

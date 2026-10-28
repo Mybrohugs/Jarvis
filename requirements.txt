@@ -10,3 +10,7 @@ pywebpush          # iPhone push notifications
 faster-whisper     # "Hey JARVIS" speech recognition
 openwakeword       # "Hey JARVIS" wake word
 sounddevice        # microphone
+keyboard           # hold-to-dictate (F9)
+winrt-runtime      # music in any player (Windows media controls)
+winrt-Windows.Media.Control
+winrt-Windows.Foundation

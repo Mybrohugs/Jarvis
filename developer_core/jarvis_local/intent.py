@@ -204,9 +204,110 @@ def profile_plan(text):
     return None
 
 
+def reminder_plan(text):
+    from .reminders import TRIGGER
+    t = re.sub(r'^(джарвис|jarvis),?\s*', '', text.strip(), flags=re.I)
+    low = t.lower()
+    if TRIGGER.match(t):
+        return [_step('reminder-add', phrase=t)]
+    if re.search(r'\b(какие|список|покажи|мои)\s+(у меня\s+)?(напоминани|таймер)', low):
+        return [_step('reminder-list')]
+    m = re.match(r'(?:отмени|убери|сними|выключи)\s+(все\s+)?(?:напоминани\w*|таймер\w*)\s*(?:про|о|об)?\s*(.*)$', low)
+    if m:
+        return [_step('reminder-cancel', what='все' if m.group(1) and not m.group(2) else m.group(2).strip())]
+    return []
+
+
+MUSIC_RULES = (
+    (r'^(?:поставь\s+)?(?:на\s+)?пауз[ауы]\b|останови\s+(?:музыку|видео|трек|песню)|^стоп\s+(?:музыка|видео)', 'pause'),
+    (r'^(?:продолжи|продолжай|играй\s+дальше|сними\s+с\s+паузы|сними\s+паузу|сними\s+с\s+пауз\w+)'
+     r'|^включи\s+(?:музыку\s+)?дальше', 'play'),
+    (r'\bследующ\w+\s*(?:трек|песн\w*|композици\w*|видео)?|^пропусти\b|^переключи\s+(?:трек|песню)', 'next'),
+    (r'\bпредыдущ\w+\s*(?:трек|песн\w*|композици\w*|видео)?|^верни\s+(?:трек|песню)|^прошл\w+\s+(?:трек|песн\w*)',
+     'previous'),
+)
+
+
+def music_plan(text):
+    low = re.sub(r'^(джарвис|jarvis),?\s*', '', text.strip().lower()).strip(' .!?')
+    if re.search(r'^что\s+(?:сейчас\s+)?(?:играет|звучит)|^что\s+за\s+(?:песня|трек|музыка)', low):
+        return [_step('music-status')]
+    for pattern, action in MUSIC_RULES:
+        if re.search(pattern, low) and not re.search(r'телевизор|саундбар|громкост', low):
+            return [_step('music', action=action)]
+    return []
+
+
+HOME_WORDS = r'свет|ламп|люстр|торшер|подсветк|светильник|розетк|\bбра\b'
+
+
+ROUTINE_PHRASES = (('home', r'я\s+(?:дома|пришёл|пришел|вернулся)'), ('away', r'я\s+(?:ушёл|ушел|ухожу)'),
+                   ('morning', r'доброе\s+утро'), ('evening', r'(?:вечер\s+добрый|добрый\s+вечер)'))
+
+
+def home_plan(text):
+    t = re.sub(r'^(джарвис|jarvis),?\s*', '', text.strip(), flags=re.I).strip(' .!?')
+    low = t.lower()
+    if re.search(r'^(?:какие|покажи)\s+(?:у меня\s+)?(?:устройства|лампы|розетки)|^что\s+(?:сейчас\s+)?включено(?:\s+дома)?$', low):
+        return [_step('home-devices')]
+    for name, pat in ROUTINE_PHRASES:
+        if re.fullmatch(r'(?:%s)(?:\s*,?\s*(?:джарвис|jarvis))?' % pat, low):
+            return [_step('home-routine', name=name)]
+    m = re.match(r'^(?:запусти|включи)\s+сценари\w*\s+[«"]?(.+?)[»"]?$', low)
+    if m:
+        return [_step('home-scenario', name=m.group(1).strip())]
+    if not re.search(HOME_WORDS, low):
+        return []
+    m = re.search(r'(?:яркост\w*|свет\w*|ламп\w*)\s+(?:на\s+)?(\d{1,3})\s*(?:%|процент\w*)?', low)
+    if m and 1 <= int(m.group(1)) <= 100:
+        return [_step('home-brightness', phrase=t, level=int(m.group(1)))]
+    if re.search(r'^(?:приглуши|убавь)\b', low):
+        return [_step('home-brightness', phrase=t, level=30)]
+    if re.search(r'^(?:включи|зажги|вруби)\b', low):
+        return [_step('home-switch', phrase=t, on=True)]
+    if re.search(r'^(?:выключи|погаси|отключи|выруби)\b', low):
+        return [_step('home-switch', phrase=t, on=False)]
+    return []
+
+
+def web_plan(text):
+    t = re.sub(r'^(джарвис|jarvis),?\s*', '', text.strip(), flags=re.I).strip(' .!?')
+    m = re.match(r'^(?:найди|поищи|загугли|узнай|посмотри)\s+(?:мне\s+)?(?:в\s+интернете|в\s+сети|в\s+гугле|онлайн)'
+                 r'\s*,?\s*(.{2,300})$', t, re.I) or re.match(r'^загугли\s+(.{2,300})$', t, re.I)
+    if m:
+        return [_step('web-answer', question=m.group(1).strip())]
+    m = re.match(r'^(?:что нового|какие новости|последние новости)\s+(?:про|о|об|в|по)\s+(.{2,200})$', t, re.I)
+    if m:
+        return [_step('web-answer', question='новости ' + m.group(1).strip())]
+    return []
+
+
+ORDINALS = {'первый': 1, 'второй': 2, 'третий': 3, 'четвёртый': 4, 'четвертый': 4, 'пятый': 5}
+
+
+def apps_plan(text):
+    from .apps import APPS, FOLDERS, SITES
+    low = re.sub(r'^(джарвис|jarvis),?\s*', '', text.strip().lower()).strip(' .!?')
+    if re.match(r'^(?:сверни все окна|покажи рабочий стол)$', low):
+        return [_step('desktop-show')]
+    if re.match(r'^(?:какие|что за)\s+(?:окна|программы)\s+(?:сейчас\s+)?(?:открыты|запущены)', low):
+        return [_step('windows-list')]
+    m = re.match(r'^открой\s+(?:файл\s+(?:номер\s+)?(\d{1,2})|(\d{1,2})(?:-?й)?\s+файл|(\w+)\s+файл)$', low)
+    if m:
+        n = int(m.group(1) or m.group(2) or 0) or ORDINALS.get(m.group(3) or '', 0)
+        return [_step('file-open', index=n)] if n else []
+    m = re.match(r'^(?:открой|запусти|включи)\s+(?:мне\s+)?(?:(папку|сайт|программу|приложение)\s+)?(.+)$', low)
+    if m and m.group(2).strip() in set(FOLDERS) | set(SITES) | set(APPS):
+        return [_step('app-open', target=m.group(2).strip())]
+    return []
+
+
 def understand(text):
     if not isinstance(text, str) or not text.strip() or len(text) > 2000:
         return {'intent': 'unknown', 'steps': [], 'reason': 'Пустая или слишком длинная команда'}
+    steps = reminder_plan(text) or music_plan(text) or home_plan(text) or web_plan(text) or apps_plan(text)
+    if steps:
+        return {'intent': 'plan', 'steps': steps, 'summary': describe(steps)}
     if not DANGEROUS.search(re.sub(QUOTED, ' ', text)):
         steps = profile_plan(text)
         if steps:
@@ -215,7 +316,8 @@ def understand(text):
         # understood everywhere: PC CLI, the "Hey JARVIS" voice loop and phone free speech.
         from .pwa_gateway import phone_quick_command
         quick = phone_quick_command(re.sub(r'^(джарвис|jarvis),?\s*', '', text.strip(), flags=re.I))
-        if quick and quick['task'].startswith('pc-') and quick['task'] in TASKS:  # media phrases: rules below
+        if quick and (quick['task'].startswith('pc-') or quick['task'] == 'screen-describe') \
+                and quick['task'] in TASKS:  # media phrases: rules below
             steps = [_step(quick['task'], **quick['args'])]
             return {'intent': 'plan', 'steps': steps, 'summary': describe(steps)}
     # Quoted text is user content (e.g. a note "купить молоко"), not an instruction.
@@ -265,7 +367,15 @@ NAMES = {'status': 'показать статус', 'audit': 'показать �
          'profile-show': 'рассказать, что я о вас знаю', 'profile-forget': 'забыть', 'profile-style': 'стиль ответов',
          'pc-find': 'найти файл на компьютере', 'pc-send': 'отправить файл на iPhone',
          'pc-clip-get': 'показать буфер обмена ПК', 'pc-clip-set': 'положить текст в буфер ПК',
-         'pc-screen': 'снимок экрана'}
+         'pc-screen': 'снимок экрана', 'reminder-add': 'поставить напоминание',
+         'reminder-list': 'показать напоминания', 'reminder-cancel': 'отменить напоминание',
+         'music': 'управлять музыкой на компьютере', 'music-status': 'что играет на компьютере',
+         'home-devices': 'устройства умного дома', 'home-switch': 'включить/выключить свет или розетку',
+         'home-brightness': 'яркость света', 'home-scenario': 'сценарий умного дома',
+         'home-routine': 'домашний режим (я дома / ушёл / утро / вечер)',
+         'screen-describe': 'рассказать, что на экране', 'web-answer': 'найти ответ в интернете',
+         'app-open': 'открыть программу, папку или сайт', 'file-open': 'открыть найденный файл',
+         'desktop-show': 'свернуть все окна', 'windows-list': 'какие программы открыты'}
 
 
 def describe(steps):

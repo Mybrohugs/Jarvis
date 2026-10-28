@@ -46,5 +46,61 @@ class VoiceLoopTests(unittest.TestCase):
         self.assertLess(len(audio), 1280 * 30)  # stopped well before all frames were consumed
 
 
+class FakePlayer:
+    def __init__(self, frames):
+        self.left, self.played, self.stopped = frames, [], False
+
+    def play(self, data):
+        self.played.append(data)
+
+    def active(self):
+        self.left -= 1
+        return self.left > 0 and not self.stopped
+
+    def stop(self):
+        self.stopped = True
+
+
+class FakeWake:
+    def __init__(self, hit_at=None):
+        self.n, self.hit_at, self.resets = 0, hit_at, 0
+
+    def predict(self, chunk):
+        self.n += 1
+        return {'hey_jarvis': 0.9 if self.n == self.hit_at else 0.01}
+
+    def reset(self):
+        self.resets += 1
+
+
+class BargeInTests(unittest.TestCase):
+    def speaker(self, wake, frames=20):
+        from developer_core.jarvis_local.voice_loop import BargeInSpeaker
+        self.player = FakePlayer(frames)
+        return BargeInSpeaker(lambda: np.zeros(1280, dtype=np.int16), wake, fetch=lambda t: b'RIFF', player=self.player)
+
+    def test_reply_plays_to_the_end_without_wake_word(self):
+        s = self.speaker(FakeWake())
+        self.assertTrue(s('Готово.'))
+        self.assertFalse(s.interrupted or self.player.stopped)
+
+    def test_wake_word_cuts_in_and_later_phrases_stay_silent(self):
+        wake = FakeWake(hit_at=3)
+        s = self.speaker(wake)
+        s('Сэр, включаю режим игры.')
+        self.assertTrue(s.interrupted and self.player.stopped)
+        self.assertEqual(wake.resets, 1)
+        self.assertFalse(s('Готово. Приятной игры.'))  # the rest of this answer is not spoken
+        self.assertEqual(len(self.player.played), 1)
+
+    def test_voice_server_down_is_silent_not_fatal(self):
+        from developer_core.jarvis_local.voice_loop import BargeInSpeaker
+
+        def down(text):
+            raise OSError('voice server down')
+        s = BargeInSpeaker(lambda: None, FakeWake(), fetch=down, player=FakePlayer(5))
+        self.assertFalse(s('Готово.'))
+
+
 if __name__ == '__main__':
     unittest.main()

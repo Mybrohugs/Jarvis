@@ -147,7 +147,11 @@ def phone_quick_command(text):
         return {'task': 'pc-clip-set', 'args': {'text': m.group(1)}}
     if re.search(r'(скинь|отправь|покажи|пришли|что в) (мне )?буфер\w*', t):
         return {'task': 'pc-clip-get', 'args': {}}
-    if re.search(r'что на экране|скриншот|снимок экрана', t):
+    m = re.search(r'что (?:у меня |там |сейчас )*на экране|прочитай (?:ошибку|текст)? ?(?:на|с) экран\w*|'
+                  r'что за ошибка на экране', t)
+    if m:
+        return {'task': 'screen-describe', 'args': {}}
+    if re.search(r'скриншот|снимок экрана', t):
         return {'task': 'pc-screen', 'args': {}}
     if re.search(r'режим\w* игр\w*|\bпоиграем\b|\bигровой режим\b|\bвремя игр\w*', t):
         return {'task': 'media-scene', 'args': {'name': 'game'}}

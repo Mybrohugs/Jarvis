@@ -24,9 +24,20 @@ def _http_ok(port, path, timeout=3):
         c.close()
 
 
+def _ollama_models():
+    c = http.client.HTTPConnection('127.0.0.1', 11434, timeout=3)
+    try:
+        c.request('GET', '/api/tags')
+        return [m['name'] for m in json.loads(c.getresponse().read(1_000_000)).get('models', [])]
+    finally:
+        c.close()
+
+
 class Doctor:
-    def __init__(self, router, run=subprocess.run, http_ok=_http_ok, clock=time.time):
-        self.r, self.run, self.http_ok, self.clock = router, run, http_ok, clock
+    def __init__(self, router, run=subprocess.run, http_ok=_http_ok, clock=time.time, models=_ollama_models,
+                 keys=None):
+        self.r, self.run, self.http_ok, self.clock, self.models = router, run, http_ok, clock, models
+        self.keys = keys  # {'Gemini': bool, ...}; None = look at the real DPAPI key files
 
     def _check(self, name, fn):
         try:
@@ -88,12 +99,53 @@ class Doctor:
         return ('PASS' if n else 'WARN'), 'уведомления: %d устр.' % n, (
             None if n else 'на iPhone нажмите «Включить уведомления»')
 
+    def search(self):
+        code = self.http_ok(8888, '/')
+        return ('PASS', 'поиск SearXNG: работает', None) if code == 200 else (
+            'WARN', 'поиск SearXNG: HTTP %s' % code, 'docker start jarvis-searxng')
+
+    def local_models(self):
+        have = self.models()
+        need = {'qwen3:8b': 'понимание речи и пересказ', 'qwen2.5vl:3b': '«что на экране»'}
+        missing = [m for m in need if m not in have]
+        if not missing:
+            return 'PASS', 'локальные модели: %s' % ', '.join(need), None
+        return 'WARN', 'нет моделей: %s' % ', '.join('%s (%s)' % (m, need[m]) for m in missing),             'ollama pull ' + missing[0]
+
+    def cloud_keys(self):
+        keys = self.keys
+        if keys is None:
+            from .claude_writer import keys as claude_keys
+            from .gemini_voice import KeyStore
+            from .slide_images import pexels_keys
+            keys = {'Gemini (голос)': KeyStore().configured(), 'Claude (выступления)': claude_keys().configured(),
+                    'Pexels (фото для слайдов)': pexels_keys().configured()}
+        missing = [k for k, ok in keys.items() if not ok]
+        return ('PASS' if not missing else 'WARN'), ('ключи: все на месте' if not missing else
+                                                     'нет ключей: ' + ', '.join(missing)), None
+
+    def smart_home(self):
+        from .yandex_iot import keys as yandex_keys
+        if not yandex_keys().configured():
+            return 'WARN', 'умный дом Яндекса: нет токена', 'python -m developer_core.jarvis_local.yandex_iot set-token'
+        info = self.r.yandex.info()
+        n = sum(1 for d in info['devices'] if d['kind'])
+        have = {s['name'].lower().replace('ё', 'е') for s in info['scenarios']}
+        missing = [title for title, _, speaker in self.r.ROUTINES.values()
+                   if speaker and title.lower().replace('ё', 'е') not in have]
+        detail = 'умный дом Яндекса: света и розеток %d, сценариев %d' % (n, len(info['scenarios']))
+        if missing:  # the lights still work; only the speaker part of these routines is missing
+            return 'WARN', detail + '; для колонки нет сценария: ' + ', '.join(missing), 'создайте в «Доме с Алисой»'
+        return 'PASS', detail, None
+
     def report(self):
         checks = [self._check('V8/Office', self.v8), self._check('Журнал', self.journal),
                   self._check('Телевизор', self.tv), self._check('Шлюз iPhone', self.service(10790, 'шлюз iPhone')),
                   self._check('Голос', self.service(10791, 'голосовой сервер')),
                   self._check('Исполнитель', self.executor), self._check('Tailscale', self.tailscale),
-                  self._check('Диск', self.disk), self._check('Уведомления', self.push)]
+                  self._check('Диск', self.disk), self._check('Уведомления', self.push),
+                  self._check('Поиск', self.search), self._check('Модели', self.local_models),
+                  self._check('Ключи', self.cloud_keys), self._check('Умный дом', self.smart_home)]
         fails = [c for c in checks if c['status'] == 'FAIL']
         warns = [c for c in checks if c['status'] == 'WARN']
         if not fails and not warns:
