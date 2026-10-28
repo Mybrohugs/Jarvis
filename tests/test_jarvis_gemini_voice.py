@@ -81,6 +81,36 @@ class GeminiVoiceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.voice().speak('x' * 401)
 
+    def test_used_up_quota_moves_to_the_next_model(self):
+        tried = []
+
+        def quota(path, body, key):
+            tried.append(body['model'])
+            if body['model'] in ('gemini-3.8-flash-tts', 'gemini-3.8-flash-lite-tts'):
+                raise Denied('Gemini HTTP 429 Rate limit exceeded (limit: 10 requests per day on Free Tier)')
+            return self.transport(path, body, key)
+        v = GeminiVoice('Schedar', keys=FakeKeys(), transport=quota, cache=Path(self.tmp.name), effect=None, bank=None)
+        self.assertTrue(v.speak('Первая фраза.').startswith(b'RIFF'))
+        self.assertEqual(tried, ['gemini-3.8-flash-tts', 'gemini-3.8-flash-lite-tts', 'gemini-3.1-flash-tts-preview'])
+        # older models get the style as an instruction, never as metadata
+        text = self.calls[-1][1]['input'][0]['content'][0]
+        self.assertNotIn('annotations', text)
+        self.assertTrue(text['text'].endswith('Первая фраза.'))
+        tried.clear()
+        v.speak('Вторая фраза.')  # resting models are skipped, no wasted requests
+        self.assertEqual(tried, ['gemini-3.1-flash-tts-preview'])
+
+    def test_offline_does_not_walk_the_chain(self):
+        tried = []
+
+        def offline(path, body, key):
+            tried.append(body['model'])
+            raise Denied('Gemini unreachable: OSError')
+        v = GeminiVoice('Schedar', keys=FakeKeys(), transport=offline, cache=Path(self.tmp.name), effect=None, bank=None)
+        with self.assertRaises(Denied):
+            v.speak('Нет сети.')
+        self.assertEqual(len(tried), 1)
+
 
 if __name__ == '__main__':
     unittest.main()

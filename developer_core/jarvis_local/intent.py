@@ -184,7 +184,7 @@ def profile_plan(text):
     low = t.lower()
     low = re.sub(r'^(джарвис|jarvis),?\s*', '', low)
     t = t[len(t) - len(low):] if len(low) <= len(t) else t
-    if re.fullmatch(r'что ты (?:обо|про|о) мне (?:знаешь|помнишь)\??|что ты помнишь обо мне\??|кто я\??', low):
+    if re.fullmatch(r'что ты (?:обо|про|о) мне (?:знаешь|помнишь)\??|что ты помнишь обо мне\??|кто я\??|как меня зовут\??', low):
         return [_step('profile-show')]
     if re.fullmatch(r'забудь вс[её](?: обо мне| про меня)?', low):
         return [_step('profile-forget', what='всё')]
@@ -302,6 +302,18 @@ def apps_plan(text):
     return []
 
 
+QUESTION = re.compile(r'^(?:как|что такое|что значит|что это|что за|кто|почему|зачем|сколько|когда|где(?!\s+(?:мо[йяиеё]\w*|лежит|находится файл))|какой|какая|какое|'
+                      r'какие|каков\w*|чем|откуда|куда|можно ли|правда ли|есть ли|расскажи (?:про|о|об)|объясни)\s+\S+\s+\S|'
+                      r'^\S+(?:\s+\S+){2,}\?$', re.I)
+
+# Questions about the owner or JARVIS itself never leave the PC ("как меня зовут", "что ты умеешь").
+PERSONAL = re.compile(r'(?<!\w)(?:меня|мне|мной|мой|моя|моё|мое|мои|моих|ты|тебя|тебе|тобой|твой|твоя|твои|вы|вас|вам)(?!\w)', re.I)
+
+
+def _bare(text):
+    return re.sub(r'^(джарвис|jarvis),?\s*', '', text.strip(), flags=re.I).strip()[:300]
+
+
 def understand(text):
     if not isinstance(text, str) or not text.strip() or len(text) > 2000:
         return {'intent': 'unknown', 'steps': [], 'reason': 'Пустая или слишком длинная команда'}
@@ -336,6 +348,10 @@ def understand(text):
         if last_dst and re.search(r'результат|её|ее|его|копию', c.lower()) and not _paths(c):
             c = c + ' ' + last_dst
         part = _clause(c)
+        if part is None and QUESTION.match(_bare(text)) and not PERSONAL.search(_bare(text)):
+            # A plain question nothing else understood: answer it from the internet (text only).
+            steps = [_step('web-answer', question=_bare(text))]
+            return {'intent': 'plan', 'steps': steps, 'summary': describe(steps)}
         if part is None:
             return {'intent': 'unknown', 'steps': [], 'reason': 'Не понял: «%s»' % c.strip()[:120]}
         if isinstance(part, dict):

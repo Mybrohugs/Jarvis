@@ -160,5 +160,50 @@ class PWATests(unittest.TestCase):
             build(self.root, 'short', 0)
 
 
+class ListenTests(unittest.TestCase):
+    """Push-to-talk: audio in, text out. Nothing is queued or run by /api/listen itself."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.heard = []
+        self.server = build(self.tmp.name, TOKEN, 0, say_wait=0.2,
+                            listen=lambda data: self.heard.append(data) or 'включи свет')
+        self.port = self.server.server_port
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+
+    req = PWATests.req
+
+    def test_audio_becomes_text_only(self):
+        r, raw = self.req('POST', '/api/listen', b'\x00' * 5000, ctype='audio/mp4')
+        self.assertEqual((r.status, json.loads(raw)['text']), (200, 'включи свет'))
+        self.assertEqual(len(self.heard[0]), 5000)
+        self.assertEqual(PhoneQueue(Workspace(self.tmp.name)).items(), [])  # transcription never queues
+
+    def test_listen_guards(self):
+        self.assertEqual(self.req('POST', '/api/listen', b'x' * 100, token=None, ctype='audio/mp4')[0].status, 401)
+        self.assertEqual(self.req('POST', '/api/listen', b'x' * 100, ctype='application/json')[0].status, 415)
+        big = b'x' * (pwa_gateway.MAX_AUDIO + 1)
+        try:  # refused before reading: Windows may reset the socket while the client is still sending
+            self.assertEqual(self.req('POST', '/api/listen', big, ctype='audio/mp4')[0].status, 413)
+        except ConnectionError:
+            pass
+        self.assertEqual(self.heard, [])  # the oversized audio never reached the transcriber
+
+    def test_busy_and_bad_audio(self):
+        def busy(data):
+            raise BlockingIOError
+        srv = build(self.tmp.name, TOKEN, 0, listen=busy)  # a second server whose transcriber is busy
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close)
+        self.addCleanup(srv.shutdown)
+        self.port = srv.server_port
+        self.assertEqual(self.req('POST', '/api/listen', b'x' * 100, ctype='audio/mp4')[0].status, 429)
+        with self.assertRaises(Exception):
+            pwa_gateway.decode_audio(b'not audio at all')
+
+
 if __name__ == '__main__':
     unittest.main()

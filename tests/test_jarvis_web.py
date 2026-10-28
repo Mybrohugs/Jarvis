@@ -54,5 +54,23 @@ class WebTests(unittest.TestCase):
                 validate({'task': 'web-answer', 'args': {'question': 'x' * 400}})
 
 
+class QuestionTests(unittest.TestCase):
+    def test_plain_questions_go_to_the_internet(self):
+        from developer_core.jarvis_local.intent import understand
+        for q in ('Как устроен квантовый компьютер', 'Джарвис, почему небо голубое?', 'что такое чёрная дыра',
+                  'кто написал Войну и мир', 'где находится Эверест', 'расскажи про Илона Маска'):
+            step = understand(q)['steps'][0]
+            self.assertEqual(step['task'], 'web-answer', q)
+        self.assertEqual(understand('Джарвис, почему небо голубое?')['steps'][0]['args']['question'], 'почему небо голубое?')
+        # commands and PC lookups keep their own meaning
+        for q, task in (('как дела', 'status'), ('что на экране', 'screen-describe'), ('что играет', 'music-status'),
+                        ('какие окна открыты', 'windows-list'), ('что включено дома', 'home-devices')):
+            self.assertEqual(understand(q)['steps'][0]['task'], task, q)
+        self.assertEqual(understand('где мой отчёт')['intent'], 'unknown')  # left to the planner / PC search
+        self.assertEqual(understand('как удалить файл')['intent'], 'refused')
+        self.assertEqual(understand('как меня зовут')['steps'][0]['task'], 'profile-show')  # about the owner: stays local
+        self.assertNotEqual(understand('что ты умеешь')['steps'][:1], [{'task': 'web-answer', 'args': {'question': 'что ты умеешь'}}])
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -40,6 +40,13 @@ VOICES = ('Charon', 'Orus', 'Iapetus', 'Algenib', 'Rasalgethi', 'Sadaltager', 'G
 STYLE = ('Спокойный, вежливый и уверенный британский дворецкий-ассистент: ровный бархатный голос, '
          'лёгкая ирония, без спешки, чёткая дикция.')
 MAX_TEXT = 400
+# Each TTS model has its own free daily quota (10 phrases/day each in 10.2026), so a 429 moves on to the
+# next one with the same voice. True = the style goes as speech metadata; False = older models that
+# only take the style as an instruction in front of the text.
+MODELS = (('gemini-3.8-flash-tts', True), ('gemini-3.8-flash-lite-tts', True),
+          ('gemini-3.1-flash-tts-preview', False), ('gemini-2.5-flash-preview-tts', False))
+INLINE_STYLE = 'Say in a calm, warm, low British butler voice, in Russian: '
+REST_S = 1800  # a model that answered 429 is skipped for half an hour
 # offline fallback: frequent replies pre-recorded with the local Qwen3-TTS voice (qwen_bank.py)
 LOCAL_BANK = Path.home() / 'Documents' / 'Codex' / 'JARVIS-my-voice' / 'local_voice' / 'bank'
 
@@ -98,11 +105,10 @@ def _https(path, body, key):
         conn.close()
 
 
-def request_body(text, voice, style=STYLE):
-    return {'model': MODEL,
-            'input': [{'type': 'user_input', 'content': [{
-                'type': 'text', 'text': text,
-                'annotations': [{'type': 'speech_metadata', 'style': style}]}]}],
+def request_body(text, voice, style=STYLE, model=MODEL, metadata=True):
+    content = {'type': 'text', 'text': text, 'annotations': [{'type': 'speech_metadata', 'style': style}]}         if metadata else {'type': 'text', 'text': INLINE_STYLE + text}
+    return {'model': model,
+            'input': [{'type': 'user_input', 'content': [content]}],
             'response_format': {'type': 'audio'},
             'generation_config': {'speech_config': [{'voice': voice}]}}
 
@@ -142,6 +148,25 @@ class GeminiVoice:
         self.cache.mkdir(parents=True, exist_ok=True)
         self.bank = Path(bank) if bank else None
         self.lock = threading.Lock()
+        self.resting = {}  # model -> time until which it is skipped (quota used up)
+
+    def _generate(self, text):
+        """Try the models in order; a used-up quota moves on, being offline does not (every model is offline)."""
+        last = None
+        for model, metadata in MODELS:
+            if self.resting.get(model, 0) > time.time():
+                continue
+            try:
+                return audio_from(self.transport('/v1beta/interactions',
+                                                 request_body(text, self.voice, model=model, metadata=metadata),
+                                                 self.keys.load()))
+            except Denied as exc:
+                last = exc
+                if 'unreachable' in str(exc):
+                    raise
+                if ' 429 ' in str(exc):
+                    self.resting[model] = time.time() + REST_S
+        raise last or Denied('Gemini: every voice model is resting (daily quota)')
 
     @property
     def style(self):
@@ -164,8 +189,7 @@ class GeminiVoice:
         else:
             try:
                 with self.lock:
-                    data = audio_from(self.transport('/v1beta/interactions', request_body(text, self.voice),
-                                                     self.keys.load()))
+                    data = self._generate(text)
             except Denied:  # offline or rate-limited: use the local pre-recorded voice if this phrase exists
                 local = self.bank / (bank_key(text) + '.wav') if self.bank else None
                 if local is None or not local.is_file():

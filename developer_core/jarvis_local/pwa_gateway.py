@@ -1,4 +1,5 @@
-"""Phone PWA gateway (iPhone home-screen app). A REMOTE surface: read + queue only.
+"""Phone PWA gateway (iPhone home-screen app). A REMOTE surface: read + queue only, plus one inbox
+folder for files sent from the phone (phone_inbox: never overwrites, never opens or runs anything).
 
 Deliberately imports nothing that can act (no router, session, V8, browser, windows,
 notepad). The phone can read sanitized status/audit and append a text request to a
@@ -24,6 +25,7 @@ from pathlib import Path
 import re
 import uuid
 from .outbox import take_outbox
+from . import phone_inbox
 from .push import Push
 from .workspace import Workspace
 
@@ -31,6 +33,7 @@ ASSETS = Path(__file__).with_name('pwa')
 STATIC = {
     '/': ('index.html', 'text/html; charset=utf-8'),
     '/app.js': ('app.js', 'text/javascript; charset=utf-8'),
+    '/orb.js': ('orb.js', 'text/javascript; charset=utf-8'),
     '/app.css': ('app.css', 'text/css; charset=utf-8'),
     '/sw.js': ('sw.js', 'text/javascript; charset=utf-8'),
     '/manifest.webmanifest': ('manifest.webmanifest', 'application/manifest+json'),
@@ -45,6 +48,7 @@ AUDIT_FIELDS = ('id', 'utc', 'task', 'status')
 MAX_BODY = 2048
 MAX_REQUEST = 500
 MAX_PENDING = 50
+MAX_AUDIO = 2_000_000  # ~1 min of iPhone AAC; push-to-talk phrases are a few seconds
 
 
 class PhoneQueue:
@@ -274,6 +278,49 @@ def fetch_speech(text, port=VOICE_PORT, timeout=60):
         c.close()
 
 
+def decode_audio(data, rate=16000, limit_s=60):
+    """iPhone AAC/M4A, WebM/Opus or WAV bytes -> 16 kHz mono float32 (PyAV, in memory)."""
+    import io
+    import av
+    import numpy as np
+    parts, total = [], 0
+    with av.open(io.BytesIO(data), mode='r') as box:
+        resampler = av.AudioResampler(format='s16', layout='mono', rate=rate)
+        for frame in box.decode(audio=0):
+            for out in resampler.resample(frame):
+                pcm = out.to_ndarray().reshape(-1)
+                parts.append(pcm)
+                total += len(pcm)
+                if total > rate * limit_s:
+                    raise ValueError('audio too long')
+        for out in resampler.resample(None):
+            parts.append(out.to_ndarray().reshape(-1))
+    if not parts:
+        raise ValueError('no audio')
+    return np.concatenate(parts).astype(np.float32) / 32768
+
+
+class Listener:
+    """Push-to-talk from the phone: audio -> text on this PC (faster-whisper, CPU). Text only, nothing is run.
+    The audio is decoded in memory and never saved; one phrase at a time."""
+
+    def __init__(self, model='small'):
+        self.model, self.stt, self.lock = model, None, threading.Lock()
+
+    def __call__(self, data):
+        if not self.lock.acquire(blocking=False):
+            raise BlockingIOError('busy')
+        try:
+            if self.stt is None:
+                from faster_whisper import WhisperModel
+                self.stt = WhisperModel(self.model, device='cpu', compute_type='int8', cpu_threads=4)
+            audio = decode_audio(data)
+            segments, _ = self.stt.transcribe(audio, language='ru', beam_size=3, vad_filter=True)
+            return ' '.join(seg.text for seg in segments).strip()[:MAX_REQUEST]
+        finally:
+            self.lock.release()
+
+
 def plural(n, one, few, many):
     if n % 10 == 1 and n % 100 != 11:
         return one
@@ -320,7 +367,8 @@ def station_reply(text, ws, queue, wait=5.0):
             'speech': 'Записал. Выполню после подтверждения за компьютером.'}
 
 
-def build(workspace, token, port=0, allow_hosts=(), speech=fetch_speech, say_wait=5.0):
+def build(workspace, token, port=0, allow_hosts=(), speech=fetch_speech, say_wait=5.0, listen=None, allow_origins=(),
+          inbox=None):
     """token: optional master key (Siri Shortcut / scripts); phones normally pair by code."""
     if token and len(token) < 32:
         raise ValueError('JARVIS_PWA_TOKEN must be at least 32 characters')
@@ -329,9 +377,14 @@ def build(workspace, token, port=0, allow_hosts=(), speech=fetch_speech, say_wai
     devices = Devices(ws)
     pairing = Pairing()
     push = Push(ws)
+    listen = listen or Listener()
     for host in allow_hosts:
         if not re.fullmatch(r'[a-z0-9.-]{1,253}', host):
             raise ValueError('invalid --allow-host')
+    for origin in allow_origins:  # JARVIS Mobile pages (e.g. GitHub Pages) that may call this gateway
+        if not re.fullmatch(r'https://[a-z0-9.-]{1,253}', origin):
+            raise ValueError('invalid --allow-origin')
+    inbox = inbox or phone_inbox.INBOX
 
     class Handler(BaseHTTPRequestHandler):
         server_version = 'JARVIS-PWA'
@@ -354,8 +407,49 @@ def build(workspace, token, port=0, allow_hosts=(), speech=fetch_speech, say_wai
             self.send_header('Content-Security-Policy', CSP)
             self.send_header('X-Content-Type-Options', 'nosniff')
             self.send_header('Referrer-Policy', 'no-referrer')
+            self.cors()
             self.end_headers()
             self.wfile.write(data)
+
+        def cors(self):
+            origin = self.headers.get('Origin', '')
+            if origin in allow_origins:
+                self.send_header('Access-Control-Allow-Origin', origin)
+                self.send_header('Access-Control-Expose-Headers', 'Content-Disposition')
+                self.send_header('Vary', 'Origin')
+
+        def do_OPTIONS(self):  # CORS preflight for an allowed JARVIS Mobile origin only
+            if not self.guard():
+                return
+            if self.headers.get('Origin', '') not in allow_origins:
+                return self.send(403, {'error': 'origin'})
+            self.send_response(204)
+            self.cors()
+            self.send_header('Access-Control-Allow-Methods', 'GET, POST')
+            self.send_header('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-Filename')
+            self.send_header('Access-Control-Max-Age', '600')
+            if self.headers.get('Access-Control-Request-Private-Network') == 'true':
+                self.send_header('Access-Control-Allow-Private-Network', 'true')
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+
+        def upload(self):
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+            except ValueError:
+                length = -1
+            if not 0 < length <= phone_inbox.MAX_UPLOAD:
+                return self.send(413, {'error': 'file size 1 byte .. 50 MB'})
+            name = urllib.parse.unquote(self.headers.get('X-Filename', ''))[:300]
+            data = self.rfile.read(length)
+            try:
+                saved = phone_inbox.save(data, name, inbox)
+            except (OSError, ValueError) as exc:
+                ws.journal.record('phone-upload', 'DENIED', reason=type(exc).__name__, rollback=[])
+                return self.send(400, {'error': str(exc)[:200]})
+            ws.journal.record('phone-upload', 'PASS', name=saved['name'], bytes=saved['bytes'], sha256=saved['sha256'],
+                              rollback=[{'action': 'delete-copy', 'path': str(saved['path'])}])
+            return self.send(201, {'status': 'PASS', 'saved_as': saved['name'], 'bytes': saved['bytes']})
 
         def guard(self):
             port_ = self.server.server_port
@@ -402,6 +496,7 @@ def build(workspace, token, port=0, allow_hosts=(), speech=fetch_speech, say_wai
                 self.send_header('Content-Disposition', "attachment; filename*=UTF-8''" + urllib.parse.quote(name))
                 self.send_header('Cache-Control', 'no-store')
                 self.send_header('X-Content-Type-Options', 'nosniff')
+                self.cors()
                 self.end_headers()
                 return self.wfile.write(data)
             if path == '/api/push/key':
@@ -435,6 +530,24 @@ def build(workspace, token, port=0, allow_hosts=(), speech=fetch_speech, say_wai
                 return None
             return data
 
+        def listen(self):
+            if not self.headers.get('Content-Type', '').startswith('audio/'):
+                return self.send(415, {'error': 'audio required'})
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+            except ValueError:
+                length = -1
+            if not 0 < length <= MAX_AUDIO:
+                return self.send(413, {'error': 'audio size'})
+            data = self.rfile.read(length)
+            try:
+                text = listen(data)
+            except BlockingIOError:
+                return self.send(429, {'error': 'busy'})
+            except Exception as exc:  # undecodable audio, model missing: the phone shows the reason
+                return self.send(400, {'error': 'не удалось распознать: ' + type(exc).__name__})
+            return self.send(200, {'status': 'PASS', 'text': text})
+
         def do_POST(self):
             if not self.guard():
                 return
@@ -450,6 +563,10 @@ def build(workspace, token, port=0, allow_hosts=(), speech=fetch_speech, say_wai
                     return self.send(403, {'error': str(exc)[:200]})
             if not self.authed():
                 return
+            if self.path == '/api/listen':
+                return self.listen()
+            if self.path == '/api/upload':
+                return self.upload()
             if self.path not in ('/api/queue', '/api/say', '/api/speech', '/api/push/subscribe'):
                 return self.send(404, {'error': 'not found'})
             data = self.body()
@@ -487,6 +604,7 @@ def main():
     p.add_argument('--workspace', type=Path, required=True)
     p.add_argument('--port', type=int, default=10790)
     p.add_argument('--allow-host', action='append', default=[], help='e.g. mypc.tailnet-name.ts.net')
+    p.add_argument('--allow-origin', action='append', default=[], help='JARVIS Mobile page, e.g. https://name.github.io')
     p.add_argument('--revoke-all', action='store_true', help='unpair every phone and exit')
     a = p.parse_args()
     if a.revoke_all:
@@ -495,7 +613,7 @@ def main():
         return
     if not 1024 <= a.port <= 65535:
         raise SystemExit('port must be 1024..65535')
-    server = build(a.workspace, os.environ.get('JARVIS_PWA_TOKEN', ''), a.port, a.allow_host)
+    server = build(a.workspace, os.environ.get('JARVIS_PWA_TOKEN', ''), a.port, a.allow_host, allow_origins=a.allow_origin)
     print('JARVIS PWA on http://127.0.0.1:%d (phone: via private HTTPS proxy only)' % a.port, flush=True)
     print('PAIRING CODE: %s  (10 minutes, single use)' % server.pairing.code, flush=True)
     try:

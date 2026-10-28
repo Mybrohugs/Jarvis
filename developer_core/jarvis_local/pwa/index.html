@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="JARVIS">
-<meta name="theme-color" content="#03070c">
+<meta name="theme-color" content="#02060a">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icon-180.png">
 <link rel="stylesheet" href="/app.css">
@@ -16,11 +16,8 @@
 <body>
 <main id="setup" class="screen" hidden>
   <div class="frame">
-    <div class="reactor" aria-hidden="true">
-      <div class="ring r1"></div><div class="ring r2"></div><div class="ring r3"></div><div class="ring r4"></div><div class="core"></div>
-    </div>
-    <div class="brand"><h1>JARVIS</h1><span class="hud">защищённая связь</span></div>
-    <p class="muted">Введите 6-значный код, который показал JARVIS на компьютере. Телефон читает данные и ставит запросы в очередь, но ничего не выполняет.</p>
+    <div class="brand"><h1>J.A.R.V.I.S.</h1><span class="hud">защищённая связь</span></div>
+    <p class="muted">Введите 6-значный код, который показал JARVIS на компьютере.</p>
     <input id="key" type="password" inputmode="numeric" autocomplete="one-time-code" placeholder="код сопряжения">
     <label class="check"><input id="remember" type="checkbox" checked> Запомнить на этом iPhone</label>
     <button id="save" class="primary">Подключиться</button>
@@ -29,7 +26,13 @@
 </main>
 
 <main id="app" class="screen" hidden>
-  <div class="brand"><h1>JARVIS</h1><span class="hud"><span id="dot" class="dot"></span><span id="conn">в сети</span></span></div>
+  <header class="brand">
+    <h1>J.A.R.V.I.S.</h1>
+    <span class="hud status"><span id="dot" class="dot"></span><span id="conn">в сети</span></span>
+    <button id="gear" class="icon" type="button" aria-label="Настройки">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/></svg>
+    </button>
+  </header>
   <nav>
     <button data-tab="station" class="tab on">Станция</button>
     <button data-tab="summary" class="tab">Сводка</button>
@@ -38,44 +41,65 @@
   </nav>
 
   <section id="station" class="pane">
-    <div id="reactor" class="reactor" aria-hidden="true">
-      <div class="ring r1"></div><div class="ring r2"></div><div class="ring r3"></div><div class="ring r4"></div><div class="core"></div>
-      <div id="state" class="label hud">ожидание</div>
+    <div class="hudwrap">
+      <div class="readout tl"><b id="clock">--:--</b><span id="date">--</span></div>
+      <div class="readout tr"><b>SYS</b><span id="sys">online</span></div>
+      <button id="reactor" class="reactor" type="button" aria-label="Говорить с JARVIS"><canvas id="orb" aria-hidden="true"></canvas></button>
+      <div class="readout bl"><b id="lvl">00</b><span>mic</span></div>
+      <div class="readout br"><b id="lat">--</b><span>ms</span></div>
     </div>
-    <p id="reply" class="reply" aria-live="polite">Готов. Скажите или напишите запрос.</p>
+    <div id="state" class="label hud">нажмите и говорите</div>
+    <p id="reply" class="reply" aria-live="polite"></p>
     <div id="extra" class="extra"></div>
-    <form id="ask" class="frame">
-      <input id="say" maxlength="500" placeholder="например: статус" enterkeyhint="send" autocomplete="off">
-      <button class="primary" type="submit">Передать</button>
-      <label class="check"><input id="speak" type="checkbox" checked> Озвучивать ответы</label>
-      <label class="check"><input id="jarvisvoice" type="checkbox" checked> Голос JARVIS (с компьютера)</label>
-      <label class="check"><input id="awake" type="checkbox"> Режим станции: экран не гаснет</label>
-      <button id="briefing" type="button" class="soundtest">Брифинг</button>
-      <button id="soundtest" type="button" class="soundtest">Проверить звук</button>
-      <button id="pushon" type="button" class="soundtest">Включить уведомления</button>
+    <form id="ask" class="askbar">
+      <input id="say" maxlength="500" placeholder="Команда…" enterkeyhint="send" autocomplete="off">
+      <button id="mic" class="icon" type="button" aria-label="Говорить">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg>
+      </button>
+      <button class="icon send" type="submit" aria-label="Передать">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h15M13 6l6 6-6 6"/></svg>
+      </button>
     </form>
-    <div class="chips" aria-label="Быстрые команды">
-      <button type="button" data-phrase="я дома">🏡 Я дома</button>
-      <button type="button" data-phrase="я ушёл">🚪 Я ушёл</button>
-      <button type="button" data-phrase="пауза">⏸ Пауза</button>
-      <button type="button" data-phrase="продолжи">▶ Дальше</button>
-      <button type="button" data-phrase="следующий трек">⏭ Трек</button>
-      <button type="button" data-phrase="включи свет">💡 Свет</button>
-      <button type="button" data-phrase="выключи весь свет">🌑 Выкл. свет</button>
-      <button type="button" data-phrase="что включено дома">🏠 Дом</button>
-      <button type="button" data-phrase="режим игры">🎮 Игра</button>
-      <button type="button" data-phrase="режим кино">🎬 Кино</button>
-      <button type="button" data-phrase="какие у меня напоминания">⏰ Напоминания</button>
-    </div>
-    <p class="hud">голос: микрофон на клавиатуре · или «Привет, Siri, Джарвис»</p>
   </section>
 
   <section id="summary" class="pane" hidden><div id="summary-body" class="cards"></div></section>
   <section id="queue" class="pane" hidden><ul id="queue-list" class="list"></ul></section>
   <section id="audit" class="pane" hidden><ul id="audit-list" class="list"></ul></section>
-
-  <footer><span class="hud">чтение · очередь · без удалённого запуска</span><button id="forget" class="link">Забыть ключ</button></footer>
 </main>
+
+<aside id="settings" class="sheet" hidden aria-label="Настройки">
+  <div class="sheet-body frame">
+    <div class="sheet-head"><span class="hud">настройки</span>
+      <button id="close" class="icon" type="button" aria-label="Закрыть"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+    <h2 class="hud">Сценарии</h2>
+    <div class="chips" aria-label="Быстрые команды">
+      <button type="button" data-phrase="я дома">Я дома</button>
+      <button type="button" data-phrase="я ушёл">Я ушёл</button>
+      <button type="button" data-phrase="доброе утро">Утро</button>
+      <button type="button" data-phrase="добрый вечер">Вечер</button>
+      <button type="button" data-phrase="режим игры">Игра</button>
+      <button type="button" data-phrase="режим кино">Кино</button>
+      <button type="button" data-phrase="спокойной ночи">Ночь</button>
+      <button type="button" data-phrase="включи свет">Свет</button>
+      <button type="button" data-phrase="выключи весь свет">Свет выкл.</button>
+      <button type="button" data-phrase="что включено дома">Дом</button>
+      <button type="button" data-phrase="пауза">Пауза</button>
+      <button type="button" data-phrase="продолжи">Дальше</button>
+      <button type="button" data-phrase="следующий трек">Трек</button>
+      <button type="button" data-phrase="какие у меня напоминания">Напоминания</button>
+      <button type="button" id="briefing">Брифинг</button>
+    </div>
+    <h2 class="hud">Звук</h2>
+    <label class="check"><input id="speak" type="checkbox" checked> Озвучивать ответы</label>
+    <label class="check"><input id="jarvisvoice" type="checkbox" checked> Голос JARVIS (с компьютера)</label>
+    <label class="check"><input id="awake" type="checkbox"> Экран не гаснет</label>
+    <button id="soundtest" type="button" class="wide">Проверить звук</button>
+    <h2 class="hud">Уведомления</h2>
+    <button id="pushon" type="button" class="wide">Включить уведомления</button>
+    <button id="forget" type="button" class="wide danger">Забыть ключ на этом iPhone</button>
+  </div>
+</aside>
+<script src="/orb.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

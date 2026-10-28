@@ -44,6 +44,8 @@
 - Быстрые команды по разрешённому списку: громкость (не выше 40), звук, сценарии, файлы. Не больше 20 команд в минуту.
 - Push-уведомления и утренний брифинг: погода, дела, увлечения по выходным.
 - Файлы с компьютера по одноразовой ссылке, общий буфер обмена, снимок экрана.
+- Новый интерфейс: кнопка «держи и говори» (речь распознаётся на ПК), обычный вопрос получает ответ из интернета, файлы с телефона попадают во входящую папку на ПК (без перезаписи и без запуска).
+- Автозапуск одной командой: `scripts/jarvis_boot.ps1` ждёт сеть и Tailscale, поднимает шлюз и настольный JARVIS и перезапускает упавшее (журнал в `%LOCALAPPDATA%\JARVIS`).
 
 **Голос**
 - «Эй, Джарвис» у компьютера: распознавание слова-пробуждения (openWakeWord), речь — Whisper.
@@ -115,6 +117,7 @@
   - влияет ли регулировка басов на HT-S400;
   - живая команда «Эй, Джарвис»;
   - push на настоящий iPhone;
+  - «держи и говори» в новом интерфейсе на настоящем iPhone;
   - картинки из Gemini (нужен платный тариф) и Pexels (нужен ключ);
   - живое перебивание голосом.
 
@@ -153,6 +156,8 @@
 - Allow-listed quick commands: volume (max 40), mute, scenes, files. At most 20 commands per minute.
 - Push notifications and a morning briefing: weather, plans, hobbies on weekends.
 - One-time file links from the PC, shared clipboard, screenshots.
+- New UI: hold-to-talk (speech is recognised on the PC), plain questions get a web answer, files from the phone land in an inbox folder on the PC (never overwritten, never opened or run).
+- One autostart entry: `scripts/jarvis_boot.ps1` waits for the network and Tailscale, starts the gateway and the desktop JARVIS and restarts whatever dies (log in `%LOCALAPPDATA%\JARVIS`).
 
 **Voice**
 - "Hey JARVIS" at the PC: openWakeWord wake word, Whisper speech recognition.
@@ -224,6 +229,7 @@ Features that need them report "not installed".
   - whether the bass setting affects the HT-S400;
   - a live "Hey JARVIS";
   - push on a real iPhone;
+  - hold-to-talk in the new UI on a real iPhone;
   - pictures from Gemini (paid tier needed) and Pexels (key needed);
   - live barge-in.
 

@@ -2,7 +2,8 @@
 #   1) phone gateway (127.0.0.1:10790, reached via "tailscale serve", read + queue only)
 #   2) phone executor (runs ONLY volume / mute quick commands; volume <= 40)
 # Paired phones stay paired across restarts. Stop: close the two consoles.
-param([string]$TailnetHost = '')
+# -NoVoiceLoop: skip "Hey JARVIS" here (the desktop JARVIS app answers it itself).
+param([string]$TailnetHost = '', [switch]$NoVoiceLoop)
 $ErrorActionPreference = 'Stop'
 $dev = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 # The private Tailscale name lives only on this PC: <DEV>\.jarvis-local.json {"tailnet_host": "..."}
@@ -14,7 +15,11 @@ $ws = Join-Path $env:USERPROFILE 'Documents\Codex\UFO-Research\FunctionalWorkspa
 $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 if (-not (Test-Path -LiteralPath $py)) { throw "DEV python missing: $py" }
 $common = "Set-Location -LiteralPath '$dev'; `$env:PYTHONIOENCODING='utf-8'; `$env:PYTHONUNBUFFERED='1'; "
+# JARVIS Mobile (GitHub Pages) may call the gateway for files: <DEV>\.jarvis-local.json {"mobile_origin": "https://name.github.io"}
+$origin = ''
+if (Test-Path -LiteralPath $cfg) { $origin = [string](Get-Content -LiteralPath $cfg -Raw | ConvertFrom-Json).mobile_origin }
 $gw = $common + "& '$py' -B -m developer_core.jarvis_local.pwa_gateway --workspace '$ws' --port 10790 --allow-host '$TailnetHost'"
+if ($origin -match '^https://[a-z0-9.-]+$') { $gw += " --allow-origin '$origin'" }
 $ex = $common + "& '$py' -B -m developer_core.jarvis_local.phone_executor --workspace '$ws'"
 Start-Process -FilePath $ps -ArgumentList @('-NoProfile','-NoExit','-Command',$gw) -WindowStyle Minimized
 Start-Process -FilePath $ps -ArgumentList @('-NoProfile','-NoExit','-Command',$ex) -WindowStyle Minimized
@@ -33,7 +38,7 @@ if (Test-Path -LiteralPath (Join-Path $dev '.gemini-dev\gemini-key.bin')) {
     Write-Host 'Voice server starting (model load ~30 s).'
 }
 # 4) "Hey JARVIS" voice loop at the PC (feature 8), if its packages are installed
-$probe = & $py -c "import importlib.util as u; print(all(u.find_spec(m) for m in ('openwakeword','sounddevice')))" 2>$null
+$probe = if ($NoVoiceLoop) { 'False' } else { & $py -c "import importlib.util as u; print(all(u.find_spec(m) for m in ('openwakeword','sounddevice')))" 2>$null }
 if ($probe -eq 'True') {
     $vl = $common + "& '$py' -B -m developer_core.jarvis_local.voice_loop --workspace '$ws'"
     Start-Process -FilePath $ps -ArgumentList @('-NoProfile','-NoExit','-Command',$vl) -WindowStyle Minimized
