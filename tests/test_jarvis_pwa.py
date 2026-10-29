@@ -80,7 +80,7 @@ class PWATests(unittest.TestCase):
     def test_input_limits(self):
         self.assertEqual(self.req('POST', '/api/queue', {'text': 'x' * 501})[0].status, 400)
         self.assertEqual(self.req('POST', '/api/queue', {'text': 'a\x07'})[0].status, 400)
-        self.assertEqual(self.req('POST', '/api/queue', b'x' * 3000)[0].status, 413)
+        self.assertEqual(self.req('POST', '/api/queue', b'x' * 5000)[0].status, 413)  # MAX_BODY 4096
         self.assertEqual(self.req('POST', '/api/queue', {'text': 'hi'}, ctype='text/plain')[0].status, 415)
         self.assertEqual(self.req('POST', '/api/run', {'task': 'file-apply'})[0].status, 404)
 
@@ -207,3 +207,52 @@ class ListenTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class SlowAnswerTests(unittest.TestCase):
+    def test_free_speech_waits_for_a_slow_pc_answer(self):
+        """The local model needs 10-40 s: the phone must get the answer, not 'Записал…' after 10 s."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        ws = Workspace(tmp.name)
+        queue = PhoneQueue(ws)
+
+        def pc_answers_late():
+            for _ in range(200):
+                pending = [i for i in queue.items() if i['status'] == 'pending']
+                if pending:
+                    threading.Event().wait(1.2)  # longer than the old wait*2 limit (0.5 s here)
+                    queue.close(pending[0]['id'], 'done', 'Кубиты бывают в суперпозиции.', origin='phone-executor')
+                    return
+                threading.Event().wait(0.02)
+        threading.Thread(target=pc_answers_late, daemon=True).start()
+        out = pwa_gateway.station_reply('как устроен квантовый компьютер', ws, queue, wait=0.25)
+        self.assertEqual(out['speech'], 'Кубиты бывают в суперпозиции.')
+        self.assertFalse(out['queued'])
+
+
+class AccessLogTests(unittest.TestCase):
+    def test_log_has_path_status_time_only(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        log = Path(tmp.name) / 'gateway.log'
+        server = build(Path(tmp.name), TOKEN, 0, say_wait=0.1)
+        server.log_path = log
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+
+        def post(path, body):
+            c = http.client.HTTPConnection('127.0.0.1', server.server_address[1], timeout=10)
+            c.request('POST', path, json.dumps(body), {'Authorization': 'Bearer ' + TOKEN,
+                                                       'Content-Type': 'application/json', 'Host': '127.0.0.1:%d' % server.server_address[1]})
+            status = c.getresponse().status
+            c.close()
+            return status
+        self.assertEqual(post('/api/clientlog', {'event': 'voice failed: timeout <script>'}), 204)
+        self.assertEqual(post('/api/queue', {'text': 'секретный текст'}), 201)
+        text = log.read_text(encoding='utf-8')
+        self.assertIn('phone: voice failed: timeout ?script?', text)
+        self.assertIn('POST /api/queue 201', text)
+        self.assertNotIn('секретный', text)
+        self.assertNotIn(TOKEN, text)

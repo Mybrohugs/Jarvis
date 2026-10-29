@@ -45,10 +45,10 @@ STATIC = {
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; "
        "base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 AUDIT_FIELDS = ('id', 'utc', 'task', 'status')
-MAX_BODY = 2048
+MAX_BODY = 4096  # /api/speech carries a whole answer (<= 1000 chars, 2 bytes each in UTF-8)
 MAX_REQUEST = 500
 MAX_PENDING = 50
-MAX_AUDIO = 2_000_000  # ~1 min of iPhone AAC; push-to-talk phrases are a few seconds
+MAX_AUDIO = 6_000_000  # iPhone push-to-talk: a 2 MB limit refused a long phrase (413) on 2026-10-28
 
 
 class PhoneQueue:
@@ -123,7 +123,7 @@ class PhoneQueue:
         record = {'event': event, 'id': item_id, 'origin': origin,
                   'utc': datetime.datetime.now(datetime.timezone.utc).isoformat()}
         if speech:
-            record['speech'] = str(speech)[:400]
+            record['speech'] = str(speech)[:1000]  # web answers are up to 900 chars
         if link and re.fullmatch(r'/api/file/[A-Za-z0-9_\-]{20,40}', link):
             record['link'] = link
         if text:
@@ -260,14 +260,15 @@ class Pairing:
 VOICE_PORT = 10791
 
 
-def fetch_speech(text, port=VOICE_PORT, timeout=60):
+def fetch_speech(text, port=VOICE_PORT, timeout=60, local=False):
     """Ask the local voice server (user's own voice, stark-metal-2) for a WAV. Sound only."""
     import http.client
-    if not isinstance(text, str) or not 1 <= len(text.strip()) <= 400:
-        raise ValueError('text must be 1..400 characters')
+    if not isinstance(text, str) or not 1 <= len(text.strip()) <= 1000:
+        raise ValueError('text must be 1..1000 characters')
     c = http.client.HTTPConnection('127.0.0.1', port, timeout=timeout)
     try:
-        c.request('POST', '/speak', body=json.dumps({'text': text.strip()}, ensure_ascii=False).encode('utf-8'),
+        c.request('POST', '/speak', body=json.dumps({'text': text.strip(), **({'local': True} if local else {})},
+                                                    ensure_ascii=False).encode('utf-8'),
                   headers={'Content-Type': 'application/json', 'Host': '127.0.0.1:%d' % port})
         r = c.getresponse()
         data = r.read(8_000_001)
@@ -327,7 +328,27 @@ def plural(n, one, few, many):
     return few if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14 else many
 
 
-def station_reply(text, ws, queue, wait=5.0):
+ACCESS_LOG = Path(os.environ.get('LOCALAPPDATA') or Path.home()) / 'JARVIS' / 'gateway.log'
+
+
+def access_log(line, path):
+    if path is None:  # tests and embedded servers: no log
+        return
+    path = Path(path)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.is_file() and path.stat().st_size > 1_000_000:
+            os.replace(path, path.with_suffix('.log.1'))
+        with path.open('a', encoding='utf-8') as f:
+            f.write(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S ') + line + '\n')
+    except OSError:
+        pass  # logging must never break the phone
+
+
+THINK_WAIT = 60.0  # free speech goes through the PC planner and maybe a web answer: allow a slow local model
+
+
+def station_reply(text, ws, queue, wait=5.0, think_wait=THINK_WAIT):
     """Mini-station (Siri Shortcut / PWA). Fixed read-only intents; anything else is queued, never run."""
     t = text.strip().lower().rstrip('.!?')
     if re.fullmatch(r'(какой )?(статус|сводка|как дела|как ты)', t):
@@ -357,7 +378,7 @@ def station_reply(text, ws, queue, wait=5.0):
         return {'intent': 'quick', 'queued': True, 'id': item['id'],
                 'speech': 'Принял. Исполнитель на компьютере сейчас не отвечает.'}
     item = queue.add(text, interpret=True)
-    for _ in range(int(wait * 2 / 0.25)):  # LLM planning takes a few seconds
+    for _ in range(int(min(think_wait, wait * 12) / 0.25)):  # planning + web answer: 5-40 s on the local model
         got = queue.get(item['id'])
         if got and (got['status'] != 'pending' or got.get('speech')):
             return {'intent': 'request', 'queued': got['status'] == 'pending', 'id': item['id'],
@@ -392,14 +413,23 @@ def build(workspace, token, port=0, allow_hosts=(), speech=fetch_speech, say_wai
 
         def setup(self):
             self.request.settimeout(10)
+            self.t0 = time.monotonic()
             super().setup()
 
         def log_message(self, *args):
             pass
 
+        def access(self, status, note=''):
+            # path, status, time only: never text, audio, tokens or file links
+            path = self.path.split('?', 1)[0]
+            path = ('/api/file/*' if path.startswith('/api/file/') else path)[:60]
+            access_log('%s %s %d %dms%s' % (self.command, path, status, (time.monotonic() - self.t0) * 1000,
+                                            ' ' + note if note else ''), getattr(self.server, 'log_path', None))
+
         def send(self, status, body, ctype='application/json; charset=utf-8', cache='no-store'):
             data = body if isinstance(body, bytes) else (
                 body.encode('utf-8') if isinstance(body, str) else json.dumps(body, ensure_ascii=False).encode('utf-8'))
+            self.access(status)
             self.send_response(status)
             self.send_header('Content-Type', ctype)
             self.send_header('Content-Length', str(len(data)))
@@ -423,6 +453,7 @@ def build(workspace, token, port=0, allow_hosts=(), speech=fetch_speech, say_wai
                 return
             if self.headers.get('Origin', '') not in allow_origins:
                 return self.send(403, {'error': 'origin'})
+            self.access(204, 'preflight')  # JARVIS Mobile attempts show up even if the real request fails
             self.send_response(204)
             self.cors()
             self.send_header('Access-Control-Allow-Methods', 'GET, POST')
@@ -545,6 +576,9 @@ def build(workspace, token, port=0, allow_hosts=(), speech=fetch_speech, say_wai
             except BlockingIOError:
                 return self.send(429, {'error': 'busy'})
             except Exception as exc:  # undecodable audio, model missing: the phone shows the reason
+                access_log('listen error %s (%d bytes, %s)' % (type(exc).__name__, length,
+                                                            self.headers.get('Content-Type', '')[:30]),
+                           getattr(self.server, 'log_path', None))
                 return self.send(400, {'error': 'не удалось распознать: ' + type(exc).__name__})
             return self.send(200, {'status': 'PASS', 'text': text})
 
@@ -567,6 +601,13 @@ def build(workspace, token, port=0, allow_hosts=(), speech=fetch_speech, say_wai
                 return self.listen()
             if self.path == '/api/upload':
                 return self.upload()
+            if self.path == '/api/clientlog':  # the phone reports its own errors (a short fixed label only)
+                data = self.body()
+                if data is not None:
+                    access_log('phone: ' + re.sub(r'[^\w .:/()-]', '?', str(data.get('event', '')))[:120],
+                               getattr(self.server, 'log_path', None))
+                    self.send(204, b'')
+                return
             if self.path not in ('/api/queue', '/api/say', '/api/speech', '/api/push/subscribe'):
                 return self.send(404, {'error': 'not found'})
             data = self.body()
@@ -579,6 +620,8 @@ def build(workspace, token, port=0, allow_hosts=(), speech=fetch_speech, say_wai
                     return self.send(400, {'error': str(exc)[:200]})
             if self.path == '/api/speech':
                 try:
+                    if data.get('local') is True:  # JARVIS Mobile: Gemini already refused on the phone
+                        return self.send(200, speech(data.get('text'), local=True), 'audio/wav')
                     return self.send(200, speech(data.get('text')), 'audio/wav')
                 except (OSError, ValueError) as exc:
                     return self.send(503, {'error': 'voice unavailable: ' + str(exc)[:120]})
@@ -614,8 +657,15 @@ def main():
     if not 1024 <= a.port <= 65535:
         raise SystemExit('port must be 1024..65535')
     server = build(a.workspace, os.environ.get('JARVIS_PWA_TOKEN', ''), a.port, a.allow_host, allow_origins=a.allow_origin)
+    server.log_path = ACCESS_LOG  # %LOCALAPPDATA%\JARVIS\gateway.log: path, status, ms only
     print('JARVIS PWA on http://127.0.0.1:%d (phone: via private HTTPS proxy only)' % a.port, flush=True)
     print('PAIRING CODE: %s  (10 minutes, single use)' % server.pairing.code, flush=True)
+    try:  # the console runs minimized at logon: the owner (or Claude at the owner's request) reads it here
+        until = (datetime.datetime.now() + datetime.timedelta(minutes=10)).strftime('%H:%M')
+        ACCESS_LOG.with_name('pairing-code.txt').write_text('%s (single use, valid until %s)\n' % (
+            server.pairing.code, until), encoding='utf-8')
+    except OSError:
+        pass
     try:
         server.serve_forever()
     except KeyboardInterrupt:

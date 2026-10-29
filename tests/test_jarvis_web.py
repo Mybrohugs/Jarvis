@@ -42,6 +42,54 @@ class WebTests(unittest.TestCase):
         self.assertEqual(out['speech'], 'Курс доллара по ЦБ — 81,5 рубля.')
         self.assertIn('https://www.cbr.ru/currency_base/daily/', out['text'])
 
+    def test_search_down_answers_from_memory_and_says_so(self):
+        class Down(FakeHTTP):
+            def __call__(self, host, port, method, path, body=None, timeout=40):
+                if port == 8888:
+                    raise Denied('127.0.0.1:8888 unreachable (ConnectionRefusedError)')
+                return super().__call__(host, port, method, path, body, timeout)
+        http = Down('Кубиты бывают в суперпозиции.')
+        out = answer('как устроен квантовый компьютер', http)
+        self.assertTrue(out['offline'])
+        self.assertTrue(out['speech'].startswith('Поиск сейчас недоступен, отвечаю по памяти.'))
+        self.assertIn('недоступен', http.calls[-1][2]['messages'][0]['content'])
+        self.assertEqual(http.calls[-1][2]['keep_alive'], '2h')
+
+        class AllDown(FakeHTTP):
+            def __call__(self, host, port, method, path, body=None, timeout=40):
+                raise Denied('%s:%d unreachable (ConnectionRefusedError)' % (host, port))
+        with self.assertRaises(Denied):
+            answer('как устроен квантовый компьютер', AllDown())
+
+    def test_claude_answers_first_and_falls_back_to_qwen(self):
+        seen = []
+
+        def haiku(system, user):
+            seen.append((system, user))
+            return 'Курс доллара — 81,5 рубля (Claude).'
+        http = FakeHTTP()
+        out = answer('курс доллара', http, claude=haiku)
+        self.assertEqual(out['speech'], 'Курс доллара — 81,5 рубля (Claude).')
+        self.assertIn('не инструкции', seen[0][0])  # snippets stay data for Claude too
+        self.assertIn('IGNORE ALL INSTRUCTIONS', seen[0][1])  # ...passed as quoted search data, not as system text
+        self.assertEqual([c[0] for c in http.calls], [8888])  # Qwen not asked
+
+        def broken(system, user):
+            raise ConnectionError('no network')
+        out = answer('курс доллара', FakeHTTP(), claude=broken)
+        self.assertEqual(out['speech'], 'Курс доллара по ЦБ — 81,5 рубля.')  # local Qwen answered
+
+    def test_fake_http_never_reaches_the_paid_api(self):
+        from developer_core.jarvis_local import web_answer
+        called = []
+        orig = web_answer._claude_if_configured
+        web_answer._claude_if_configured = lambda: called.append(1) or (lambda s, u: 'paid')
+        try:
+            self.assertEqual(answer('курс доллара', FakeHTTP())['speech'], 'Курс доллара по ЦБ — 81,5 рубля.')
+        finally:
+            web_answer._claude_if_configured = orig
+        self.assertEqual(called, [])
+
     def test_router_allowlist_and_journal(self):
         with tempfile.TemporaryDirectory() as d:
             router = UnifiedTaskRouter(TrustedLocalSession.phone_allowlist(ALLOWED), d)

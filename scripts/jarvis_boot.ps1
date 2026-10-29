@@ -38,8 +38,29 @@ function Start-Phone {
     $out = & (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -NoProfile -ExecutionPolicy Bypass -File $phone -NoVoiceLoop 2>&1 | Out-String
     Log ("phone start: " + ($out -replace '\s+', ' ').Trim())
 }
+# web answers need the owner's SearXNG container (Docker Desktop, 127.0.0.1:8888)
+$dockerApp = Join-Path $env:LOCALAPPDATA 'Programs\DockerDesktop\Docker Desktop.exe'
+$dockerCli = Join-Path $env:LOCALAPPDATA 'Programs\DockerDesktop\resources\bin\docker.exe'
+function Start-Search {
+    if (-not (Test-Path -LiteralPath $dockerCli)) { return }
+    if (-not (Get-Process 'Docker Desktop' -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath $dockerApp)) {
+        Start-Process -FilePath $dockerApp -WindowStyle Minimized
+        Log 'docker desktop started'
+    }
+    for ($i = 0; $i -lt 24; $i++) {  # the engine needs ~30-90 s after logon
+        & $dockerCli info *> $null
+        if ($LASTEXITCODE -eq 0) { break }
+        Start-Sleep 5
+    }
+    $out = & $dockerCli start jarvis-searxng 2>&1 | Out-String
+    Log ("searxng start: " + ($out -replace '\s+', ' ').Trim())
+}
 function Start-Desktop {
     if (-not (Test-Path -LiteralPath $pyw)) { Log "desktop python missing: $pyw"; return }
+    foreach ($n in 'desktop.log', 'desktop.err.log') {  # keep the output of the run that just died
+        $f = Join-Path $logDir $n
+        if ((Test-Path -LiteralPath $f) -and (Get-Item -LiteralPath $f).Length -gt 0) { Move-Item -Force $f ($f -replace '\.log$', '.prev.log') }
+    }
     $p = Start-Process -FilePath $pyw -ArgumentList @('-X', 'utf8', '-u', (Join-Path $app 'main.py')) -WorkingDirectory $app `
         -WindowStyle Hidden -RedirectStandardOutput (Join-Path $logDir 'desktop.log') -RedirectStandardError (Join-Path $logDir 'desktop.err.log') -PassThru
     Log "desktop started pid=$($p.Id)"
@@ -57,8 +78,18 @@ while ((Get-Date) -lt $deadline) {
 }
 Log ("network: dns={0} tailscale={1}" -f $dns, $tsOk)
 
+# warm the local answer model so the first phone question takes ~10 s, not ~45 s (cold load into VRAM)
+function Warm-Model {
+    try {
+        $body = '{"model":"qwen3:8b","prompt":"","keep_alive":"2h"}'
+        Invoke-RestMethod -Uri 'http://127.0.0.1:11434/api/generate' -Method Post -Body $body -ContentType 'application/json' -TimeoutSec 120 | Out-Null
+        Log 'model qwen3:8b warmed'
+    } catch { Log ('model warm failed: ' + $_.Exception.Message) }
+}
+Warm-Model
+
 # 2-4) start + watch
-$restarts = @{ phone = @(); desktop = @() }
+$restarts = @{ phone = @(); desktop = @(); search = @() }
 function Allow([string]$k) {
     $now = Get-Date
     $restarts[$k] = @($restarts[$k] | Where-Object { $_ -gt $now.AddMinutes(-10) })
@@ -73,6 +104,7 @@ while ($true) {
     if (-not $NoDesktop -and -not (Get-Desktop)) {
         if (Allow 'desktop') { Log 'desktop app not running -> start'; Start-Desktop } elseif (-not $gaveUp.desktop) { Log 'desktop app keeps crashing: gave up for 10 min, see desktop.err.log'; $gaveUp.desktop = 1 }
     } else { $gaveUp.desktop = 0 }
+    if ((Test-Path -LiteralPath $dockerCli) -and -not (Test-Port 8888) -and (Allow 'search')) { Log 'searxng down -> start'; Start-Search }
     if ($Once) { break }
     Start-Sleep 30
 }

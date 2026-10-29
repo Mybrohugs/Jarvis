@@ -20,7 +20,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 HERE = Path(__file__).resolve().parent
 STYLE = 'stark-metal-2'
-MAX_TEXT = 400
+MAX_TEXT = 1000  # whole web answers (<= 900 chars) are voiced in one piece
 WHISPER = HERE.parents[1] / '.models' / 'whisper-tiny'
 
 
@@ -149,12 +149,15 @@ def build(voice, port):
                 return self._send(404, {'error': 'not found'})
             try:
                 n = int(self.headers.get('Content-Length', '0'))
-                if not 0 < n <= 4096:
+                if not 0 < n <= 8192:  # 1000 Cyrillic chars as \uXXXX JSON ~ 6 KB
                     raise ValueError('body size')
-                text = json.loads(self.rfile.read(n).decode('utf-8')).get('text')
+                data = json.loads(self.rfile.read(n).decode('utf-8'))
+                text = data.get('text')
                 if not isinstance(text, str) or not 1 <= len(text.strip()) <= MAX_TEXT:
                     raise ValueError('text must be 1..%d characters' % MAX_TEXT)
-                self._send(200, voice.speak(text.strip()), 'audio/wav')
+                # local=true: the caller already failed with Gemini (JARVIS Mobile): go straight to Piper
+                local = data.get('local') is True and getattr(voice, 'local', None) is not None
+                self._send(200, voice.speak(text.strip(), local=True) if local else voice.speak(text.strip()), 'audio/wav')
             except Exception as exc:
                 self._send(400, {'error': type(exc).__name__ + ': ' + str(exc)[:200]})
 

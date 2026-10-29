@@ -39,7 +39,10 @@ VOICES = ('Charon', 'Orus', 'Iapetus', 'Algenib', 'Rasalgethi', 'Sadaltager', 'G
           'Alnilam', 'Enceladus', 'Umbriel', 'Achird', 'Algieba', 'Fenrir', 'Puck', 'Kore')
 STYLE = ('Спокойный, вежливый и уверенный британский дворецкий-ассистент: ровный бархатный голос, '
          'лёгкая ирония, без спешки, чёткая дикция.')
-MAX_TEXT = 400
+MAX_TEXT = 1000
+# Long answers (web answers are up to 900 chars) go to the local Piper voice: Gemini needs 7-13 s per
+# sentence and its free tier is ~10 phrases/day, so the phone heard one sentence and then silence.
+LONG_TEXT = 250
 # Each TTS model has its own free daily quota (10 phrases/day each in 10.2026), so a 429 moves on to the
 # next one with the same voice. True = the style goes as speech metadata; False = older models that
 # only take the style as an instruction in front of the text.
@@ -86,7 +89,7 @@ class KeyStore:
 
 
 def _https(path, body, key):
-    conn = http.client.HTTPSConnection(HOST, timeout=60)
+    conn = http.client.HTTPSConnection(HOST, timeout=20)  # a slow Gemini must not hold the phone: Piper takes over
     try:
         conn.request('POST', path, body=json.dumps(body).encode('utf-8'),
                      headers={'Content-Type': 'application/json', 'x-goog-api-key': key})
@@ -134,11 +137,50 @@ def pcm_to_wav(pcm, rate=24000):
     return buf.getvalue()
 
 
+def piper_local(text):
+    """Local Piper 'Denis' voice (verified worker, CPU, no network), any length up to MAX_TEXT."""
+    import numpy as np
+    parts, cur = [], ''
+    for sentence in re.findall(r'[^.!?…]+[.!?…]*\s*', text) or [text]:
+        if cur and len(cur) + len(sentence) > 450:
+            parts.append(cur)
+            cur = ''
+        cur += sentence
+    if cur.strip():
+        parts.append(cur)
+    gap = np.zeros(int(voice_dsp.RATE * 0.2))
+    chunks = []
+    for part in parts:
+        chunks += [_piper_once(part.strip()[:500]), gap]
+    return np.concatenate(chunks[:-1]), voice_dsp.RATE
+
+
+_daemon = None
+
+
+def _piper_once(text):
+    """Long-lived Piper (model loaded once, <1 s a phrase); the one-shot verified worker if it fails."""
+    global _daemon
+    from .voice_style import synthesize
+    try:
+        if _daemon is None:
+            from ..piper_voice import PiperVoice
+            from .piper_daemon import PiperDaemon
+            root = PiperVoice(None).model()
+            if root is None:
+                raise OSError('Piper voice not installed')
+            _daemon = PiperDaemon(root)
+        x, rate = voice_dsp.wav_to_array(_daemon.speak(text))
+        return x
+    except Exception:
+        return synthesize(text)
+
+
 class GeminiVoice:
     device = 'gemini'
 
     def __init__(self, voice=DEFAULT_VOICE, keys=None, transport=_https, cache=None, effect=DEFAULT_EFFECT,
-                 bank=LOCAL_BANK):
+                 bank=LOCAL_BANK, local=None):
         if voice not in VOICES:
             raise Denied('Unknown Gemini voice: %s' % voice)
         if effect is not None and effect not in voice_dsp.FILM:
@@ -147,8 +189,13 @@ class GeminiVoice:
         self.cache = Path(cache or ROOT / 'cache')
         self.cache.mkdir(parents=True, exist_ok=True)
         self.bank = Path(bank) if bank else None
+        self.local = local  # text -> (samples, rate): the offline Piper voice (serve passes piper_local)
         self.lock = threading.Lock()
-        self.resting = {}  # model -> time until which it is skipped (quota used up)
+        self.rest_file = self.cache / 'resting.json'  # survives restarts: no 4 refused requests per restart
+        try:
+            self.resting = {k: float(v) for k, v in json.loads(self.rest_file.read_text(encoding='utf-8')).items()}
+        except (OSError, ValueError, AttributeError):
+            self.resting = {}  # model -> time until which it is skipped (quota used up)
 
     def _generate(self, text):
         """Try the models in order; a used-up quota moves on, being offline does not (every model is offline)."""
@@ -165,7 +212,12 @@ class GeminiVoice:
                 if 'unreachable' in str(exc):
                     raise
                 if ' 429 ' in str(exc):
-                    self.resting[model] = time.time() + REST_S
+                    daily = 'per day' in str(exc) or 'PerDay' in str(exc)
+                    self.resting[model] = time.time() + (6 * 3600 if daily else REST_S)
+                    try:
+                        self.rest_file.write_text(json.dumps(self.resting), encoding='utf-8')
+                    except OSError:
+                        pass
         raise last or Denied('Gemini: every voice model is resting (daily quota)')
 
     @property
@@ -179,29 +231,38 @@ class GeminiVoice:
     def cached(self, text):
         return self._hit(text.strip()).is_file()
 
-    def speak(self, text):
+    def speak(self, text, local=False):
         text = text.strip()
         if not 1 <= len(text) <= MAX_TEXT:
             raise ValueError('text must be 1..%d characters' % MAX_TEXT)
         hit = self._hit(text)  # the cache keeps Gemini's raw audio, so the effect can change freely
         if hit.is_file():
             data = hit.read_bytes()
+        elif (local or len(text) > LONG_TEXT) and self.local is not None:
+            return self._finish(*self.local(text))
         else:
             try:
                 with self.lock:
                     data = self._generate(text)
-            except Denied:  # offline or rate-limited: use the local pre-recorded voice if this phrase exists
+            except Denied:  # offline or rate-limited: pre-recorded phrase, else the local Piper voice
                 local = self.bank / (bank_key(text) + '.wav') if self.bank else None
-                if local is None or not local.is_file():
+                if local is not None and local.is_file():
+                    data = local.read_bytes()
+                elif self.local is not None:
+                    return self._finish(*self.local(text))
+                else:
                     raise
-                data = local.read_bytes()
             else:
                 tmp = hit.with_suffix('.tmp')
                 tmp.write_bytes(data)
                 os.replace(tmp, hit)
         if self.effect is None:
             return data
-        x, rate = voice_dsp.wav_to_array(data)
+        return self._finish(*voice_dsp.wav_to_array(data))
+
+    def _finish(self, x, rate):
+        if self.effect is None:
+            return voice_dsp.to_wav(x, rate)
         return voice_dsp.to_wav(voice_dsp.film(x, rate, self.effect), rate)
 
 
@@ -271,7 +332,9 @@ def main(argv=None):
             print('OK', i, name.strip(), flush=True)
         return 0
     from .voice_server import build, prewarm_phrases
-    voice = GeminiVoice(a.voice, effect=None if a.effect == 'none' else a.effect)
+    voice = GeminiVoice(a.voice, effect=None if a.effect == 'none' else a.effect, local=piper_local)
+    # load the Piper model now (~5 s) so the first answer from the phone does not wait for it
+    threading.Thread(target=lambda: _piper_once('Готов.'), daemon=True).start()
     voice.keys.load()  # fail fast without a key
     server = build(voice, a.port)
     print('VOICE SERVER ready on 127.0.0.1:%d engine=gemini voice=%s effect=%s' % (a.port, a.voice, a.effect), flush=True)

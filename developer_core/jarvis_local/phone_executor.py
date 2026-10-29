@@ -21,7 +21,8 @@ ALLOWED = ('media-volume', 'media-mute', 'media-scene',
            'home-devices', 'home-switch', 'home-brightness', 'home-scenario', 'home-routine',  # Yandex lights/sockets
            'screen-describe',  # local vision model, the picture stays on the PC
            'web-answer',  # own SearXNG + local summary
-           'app-open', 'file-open', 'desktop-show', 'windows-list')  # allowlisted apps, folders, sites
+           'app-open', 'file-open', 'desktop-show', 'windows-list',  # allowlisted apps, folders, sites
+           'chat-reply')  # greetings: a fixed reply
 PROFILE_KINDS = ('name', 'hobby', 'like', 'dislike', 'fact')
 
 
@@ -38,6 +39,10 @@ def validate(auto):
     if not isinstance(auto, dict) or auto.get('task') not in ALLOWED or not isinstance(auto.get('args'), dict):
         raise Denied('Not an allowlisted phone command')
     task, args = auto['task'], auto['args']
+    if task == 'chat-reply':
+        if set(args) != {'kind'} or args['kind'] not in ('greet', 'how', 'thanks', 'bye'):
+            raise Denied('Bad chat reply')
+        return task, {'kind': args['kind']}
     if task == 'profile-remember':
         if set(args) != {'kind', 'text'} or args['kind'] not in PROFILE_KINDS or not isinstance(args['text'], str) \
                 or not 1 <= len(args['text']) <= 200:
@@ -150,7 +155,7 @@ def validate(auto):
 
 def speech_for(task, result):
     after = result.get('after') or {}
-    if task == 'media-scene' or task.startswith(('pc-', 'profile-', 'reminder-', 'music', 'home-', 'screen-', 'web-',
+    if task == 'media-scene' or task.startswith(('pc-', 'profile-', 'reminder-', 'music', 'home-', 'screen-', 'web-', 'chat-',
                                                   'app-', 'file-open', 'desktop-', 'windows-list')):
         return result.get('speech') or 'Готово.'
     if result.get('status') != 'PASS':

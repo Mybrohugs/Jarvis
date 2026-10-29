@@ -52,7 +52,7 @@ def run_plan(router, plan):
                              if undo else 'Изменений не было')}
         ok = result.get('status') in ('PASS', 'PLAN_ONLY', 'STARTED', 'CLOSED', 'ALREADY_CLOSED', 'HOST_ALLOWED_DEV')
         done.append({'step': i + 1, 'task': step['task'], 'status': result.get('status'), 'result': result})
-        if result.get('audit_id') and step['task'] in ('file-plan', 'office-plan'):
+        if result.get('audit_id') and (step['task'] in ('file-plan', 'office-plan') or step['task'].startswith('explorer-')):
             undo.append(result['audit_id'])
         if not ok:
             return {'status': 'STOPPED', 'failed_step': i + 1, 'task': step['task'],

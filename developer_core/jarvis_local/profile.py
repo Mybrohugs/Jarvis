@@ -136,7 +136,10 @@ class Profile:
         words = len((phrase or '').split())
         s['avg_words'] = round((s.get('avg_words', words) * 0.9) + words * 0.1, 2)
         s['polite'] = round(s.get('polite', 0.0) * 0.9 + (1.0 if POLITE.search(phrase or '') else 0.0) * 0.1, 3)
-        key = '|'.join(tasks)
+        # a repeat = the same phrase again (only its hash is kept), not two different questions of one kind
+        import hashlib
+        said = re.sub(r'\W+', ' ', (phrase or '').lower()).strip()
+        key = '|'.join(tasks) + '|' + hashlib.sha256(said.encode('utf-8')).hexdigest()[:12]
         last = s.get('last', {})
         repeat = last.get('key') == key and (now.timestamp() - last.get('ts', 0)) < 45
         frustrated = bool(FRUSTRATED.search(phrase or '')) or repeat

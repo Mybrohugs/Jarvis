@@ -57,11 +57,47 @@ def scene_of(t):
     return None
 
 
+def _folders(t):
+    """Allow-listed real folders named in the phrase, in the order spoken."""
+    from .explorer import SPOKEN
+    hits = []
+    for key, pat in SPOKEN:
+        for m in re.finditer(pat, t):
+            hits.append((m.start(), key))
+    return [k for _, k in sorted(hits)]
+
+
+def explorer_clause(t, c, quoted):
+    """Explorer phrases about the owner's real folders; None when the clause is about something else."""
+    folders = _folders(t)
+    if not folders:
+        return None
+    m = re.match(r'^(?:скопируй|перемести|перенеси)\s+(?:файл\s+)?(.+?)\s+из\s+(.+?)\s+(?:в|на)\s+(.+)$', t)
+    if m and len(_folders(m.group(2))) == 1 and len(_folders(m.group(3))) == 1:
+        name = quoted or c.strip().rstrip('.!?')[m.start(1):m.end(1)].strip(' «»"')
+        task = 'explorer-copy' if t.startswith('скоп') else 'explorer-move'
+        return [_step(task, src=_folders(m.group(2))[0], name=name, dst=_folders(m.group(3))[0])]
+    if re.search(r'\b(?:разложи|рассортируй|отсортируй|разбери|наведи порядок|прибери\w*|упорядочи)', t):
+        return [_step('explorer-sort', folder=folders[0])]
+    if re.search(r'дубл\w*|дубликат\w*|повтор\w* файл|одинаков\w+ файл', t):
+        return [_step('explorer-duplicates', folder=folders[0])]
+    m = re.search(r'(?:создай|сделай|заведи)\s+(?:новую\s+)?папку\s+(?:[«"](.+?)[»"]|([\w\-]+))', c, re.I)
+    if m:
+        return [_step('explorer-mkdir', folder=folders[-1], name=(m.group(1) or m.group(2)).strip())]
+    if re.search(r'^(?:что|чего)\s+(?:нового\s+|сейчас\s+)?(?:лежит|есть|нового)\b|^покажи\b|^сколько\s+файлов'
+                 r'|^что\s+получилось', t):
+        return [_step('explorer-list', folder=folders[0])]
+    return None
+
+
 def _clause(c):
     """One clause -> list of steps, or a refusal/unknown dict."""
     t = c.strip().lower().rstrip('.!?')
     paths = _paths(c)
     quoted = _quoted(c)
+    part = explorer_clause(t, c, quoted)
+    if part:
+        return part
     if re.fullmatch(r'(какой )?(статус|сводка|как дела|как ты|ты тут)', t):
         return [_step('status')]
     if re.search(r'\bжурнал|\bистори\w+ действий|что ты (сделал|делал)', t):
@@ -314,9 +350,36 @@ def _bare(text):
     return re.sub(r'^(джарвис|jarvis),?\s*', '', text.strip(), flags=re.I).strip()[:300]
 
 
+GREET = r'(?:привет|здравствуй(?:те)?|добрый\s+день|хай|салют|здорово)'  # «добрый вечер» is a home routine
+HOW = r'(?:как\s+(?:у\s+тебя\s+)?дела|как\s+ты|как\s+поживаешь|как\s+жизнь)'
+
+
+def chat_plan(text):
+    """Small talk gets a polite fixed reply: "привет, как дела?" must not become a web search."""
+    low = re.sub(r'[!?.,…]+', ' ', text.lower())
+    low = re.sub(r'\b(?:джарвис|jarvis|жарвис|жарис)\b', ' ', low)
+    low = re.sub(r'\s+', ' ', low).strip()
+    if re.fullmatch(r'%s\s*%s' % (GREET, HOW), low):  # a bare «как дела?» stays the JARVIS status
+        return [_step('chat-reply', kind='how')]
+    if re.fullmatch(GREET, low):
+        return [_step('chat-reply', kind='greet')]
+    if re.fullmatch(r'(?:спасибо|благодарю|спасибо большое|большое спасибо)', low):
+        return [_step('chat-reply', kind='thanks')]
+    if re.fullmatch(r'(?:пока|до свидания|до связи|спокойной ночи джарвис)', low):
+        return [_step('chat-reply', kind='bye')]
+    return []
+
+
 def understand(text):
     if not isinstance(text, str) or not text.strip() or len(text) > 2000:
         return {'intent': 'unknown', 'steps': [], 'reason': 'Пустая или слишком длинная команда'}
+    steps = chat_plan(text)
+    if steps:
+        return {'intent': 'plan', 'steps': steps, 'summary': describe(steps)}
+    # "привет, включи свет": the greeting is politeness, the rest is the command
+    rest = re.sub(r'^\s*(?:%s)[\s,!.]+(?:(?:джарвис|jarvis)[\s,!.]+)?' % GREET, '', text, flags=re.I)
+    if rest != text and rest.strip():
+        text = rest
     steps = reminder_plan(text) or music_plan(text) or home_plan(text) or web_plan(text) or apps_plan(text)
     if steps:
         return {'intent': 'plan', 'steps': steps, 'summary': describe(steps)}
@@ -343,10 +406,13 @@ def understand(text):
     protected = re.sub(QUOTED, lambda m: m.group(0).replace(' и ', ' \x00 ').replace(',', '\x01'), text)
     clauses = [c.replace('\x00', 'и').replace('\x01', ',')
                for c in re.split(r',?\s+(?:и|затем|потом|после этого)\s+(?=[а-яё]{3,}\w*\b)|;\s*(?=[а-яё])', protected)]
-    steps, last_dst = [], None
+    steps, last_dst, last_folder = [], None, None
     for c in clauses:
         if last_dst and re.search(r'результат|её|ее|его|копию', c.lower()) and not _paths(c):
             c = c + ' ' + last_dst
+        if last_folder and not _folders(c.lower()) and re.search(r'покажи|что получилось|результат', c.lower()):
+            from .explorer import TITLES
+            c = c + ' в ' + TITLES[last_folder].lower()  # "...и покажи, что получилось" -> same folder
         part = _clause(c)
         if part is None and QUESTION.match(_bare(text)) and not PERSONAL.search(_bare(text)):
             # A plain question nothing else understood: answer it from the internet (text only).
@@ -361,6 +427,8 @@ def understand(text):
                 last_dst = s['args']['dst']
             elif s['task'] == 'file-plan':
                 last_dst = s['args']['entries'][-1]['dst']
+            elif s['task'].startswith('explorer-'):
+                last_folder = s['args'].get('folder') or s['args'].get('dst')
         steps.extend(part)
     plan = {'intent': 'plan', 'steps': steps, 'summary': describe(steps)}
     validate_plan(plan)
@@ -391,7 +459,11 @@ NAMES = {'status': 'показать статус', 'audit': 'показать �
          'home-routine': 'домашний режим (я дома / ушёл / утро / вечер)',
          'screen-describe': 'рассказать, что на экране', 'web-answer': 'найти ответ в интернете',
          'app-open': 'открыть программу, папку или сайт', 'file-open': 'открыть найденный файл',
-         'desktop-show': 'свернуть все окна', 'windows-list': 'какие программы открыты'}
+         'desktop-show': 'свернуть все окна', 'windows-list': 'какие программы открыты',
+         'explorer-list': 'показать, что в папке', 'explorer-duplicates': 'найти одинаковые файлы (без удаления)',
+         'explorer-mkdir': 'создать папку', 'explorer-sort': 'разложить файлы по папкам-типам (с отменой)',
+         'chat-reply': 'ответить на приветствие',
+         'explorer-copy': 'скопировать файл между папками', 'explorer-move': 'перенести файл между папками (с отменой)'}
 
 
 def describe(steps):

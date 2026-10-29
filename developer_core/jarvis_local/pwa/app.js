@@ -9,13 +9,18 @@ function stored() { try { return localStorage.getItem(KEY) || ''; } catch (e) { 
 function store(v) { try { v ? localStorage.setItem(KEY, v) : localStorage.removeItem(KEY); } catch (e) { /* private mode */ } }
 
 async function api(path, body) {
-  const opts = { headers: { Authorization: 'Bearer ' + token }, cache: 'no-store' };
+  const ctl = new AbortController();  // never hang forever: the PC waits at most 60 s for an answer
+  const timer = setTimeout(() => ctl.abort(), 75000);
+  const opts = { headers: { Authorization: 'Bearer ' + token }, cache: 'no-store', signal: ctl.signal };
   if (body !== undefined) {
     opts.method = 'POST';
     opts.headers['Content-Type'] = 'application/json';
     opts.body = JSON.stringify(body);
   }
-  const r = await fetch(path, opts);
+  let r;
+  try { r = await fetch(path, opts); } catch (e) {
+    throw new Error(e.name === 'AbortError' ? 'компьютер не ответил за 75 с' : e.message);
+  } finally { clearTimeout(timer); }
   if (r.status === 401) { throw new Error('auth'); }
   const data = await r.json();
   if (!r.ok) { throw new Error(data.error || ('HTTP ' + r.status)); }
@@ -81,34 +86,92 @@ function unlockAudio() {
   src.connect(audioCtx.destination);
   src.start(0);
 }
-async function playJarvisVoice(text) {
-  const r = await fetch('/api/speech', {
+// Long answers are spoken sentence by sentence: the voice server takes <= 400 characters and iOS
+// speechSynthesis silently stops long utterances. Each part is fetched while the previous one plays.
+function splitSpeech(text, max = 220) {
+  const parts = [];
+  for (const s of String(text).replace(/\s+/g, ' ').trim().match(/[^.!?…]+[.!?…]*\s*/g) || []) {
+    let rest = s.trim();
+    while (rest.length > max) {  // one very long sentence: cut at the last comma/space before max
+      let cut = Math.max(rest.lastIndexOf(', ', max), rest.lastIndexOf(' ', max));
+      if (cut < max / 2) { cut = max; }
+      parts.push(rest.slice(0, cut + 1).trim());
+      rest = rest.slice(cut + 1).trim();
+    }
+    const last = parts[parts.length - 1];
+    if (rest && last && last.length + rest.length < 120) { parts[parts.length - 1] = last + ' ' + rest; }  // glue short bits
+    else if (rest) { parts.push(rest); }
+  }
+  return parts;
+}
+let speechRun = 0;  // a new answer (or barge-in) stops the old one
+async function fetchVoice(text, ms) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), ms);
+  try {
+    const r = await fetch('/api/speech', {
+      method: 'POST', cache: 'no-store', signal: ctl.signal,
+      headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    if (!r.ok || !audioCtx) { throw new Error('voice ' + r.status); }
+    return await audioCtx.decodeAudioData(await r.arrayBuffer());
+  } finally { clearTimeout(timer); }
+}
+function playBuffer(buf, run) {
+  return new Promise((resolve) => {
+    if (run !== speechRun) { resolve(); return; }
+    const src = audioCtx.createBufferSource();
+    src.buffer = buf;
+    const an = audioCtx.createAnalyser();
+    an.fftSize = 512;
+    src.connect(an);
+    an.connect(audioCtx.destination);
+    const data = new Uint8Array(an.fftSize);
+    let playing = true;
+    const follow = () => {
+      if (!playing) { return; }
+      if (run !== speechRun) { playing = false; try { src.stop(); } catch (e) { /* already stopped */ } return; }
+      an.getByteTimeDomainData(data);
+      let peak = 0;
+      for (const v of data) { peak = Math.max(peak, Math.abs(v - 128)); }
+      if (window.JarvisOrb) { JarvisOrb.setLevel(Math.min(1, peak / 70)); }
+      requestAnimationFrame(follow);
+    };
+    src.onended = () => { playing = false; if (window.JarvisOrb) { JarvisOrb.setLevel(0); } resolve(); };
+    setState('speaking');
+    audioMode('playback');
+    audioCtx.resume();  // iOS suspends the context during a long wait for the answer
+    src.start(0);
+    follow();
+  });
+}
+// The whole answer is one WAV: per-sentence requests left silent gaps (Gemini needs 7-13 s per
+// sentence) and burnt the free daily quota. Long answers are voiced by Piper on the PC in ~5 s.
+// Errors are reported to the PC log (%LOCALAPPDATA%\JARVIS\gateway.log) as a short label, so a
+// failure on the phone can be diagnosed without guessing.
+function report(event) {
+  if (!token) { return; }
+  fetch('/api/clientlog', {
     method: 'POST', cache: 'no-store',
     headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text }),
-  });
-  if (!r.ok || !audioCtx) { throw new Error('voice ' + r.status); }
-  const buf = await audioCtx.decodeAudioData(await r.arrayBuffer());
-  const src = audioCtx.createBufferSource();
-  src.buffer = buf;
-  const an = audioCtx.createAnalyser();
-  an.fftSize = 512;
-  src.connect(an);
-  an.connect(audioCtx.destination);
-  const data = new Uint8Array(an.fftSize);
-  let playing = true;
-  const follow = () => {
-    if (!playing) { return; }
-    an.getByteTimeDomainData(data);
-    let peak = 0;
-    for (const v of data) { peak = Math.max(peak, Math.abs(v - 128)); }
-    if (window.JarvisOrb) { JarvisOrb.setLevel(Math.min(1, peak / 70)); }
-    requestAnimationFrame(follow);
-  };
-  setState('speaking');
-  src.onended = () => { playing = false; if (window.JarvisOrb) { JarvisOrb.setLevel(0); } setState('standby'); };
-  src.start(0);
-  follow();
+    body: JSON.stringify({ event: String(event).slice(0, 120) }),
+  }).catch(() => {});
+}
+// iOS routes sound to the quiet earpiece while the page may record; switch back for speaking.
+function audioMode(type) {
+  try { if (navigator.audioSession) { navigator.audioSession.type = type; } } catch (e) { /* older iOS */ }
+}
+async function playJarvisVoice(text) {
+  const run = ++speechRun;
+  let buf;
+  try { buf = await fetchVoice(text, 60000); } catch (e) {
+    report('voice failed: ' + (e.name === 'AbortError' ? 'timeout' : e.message));
+    if (run === speechRun) { iosSay(text); }  // voice server off -> iOS voice, sentence by sentence
+    return;
+  }
+  await playBuffer(buf, run);
+  if (run === speechRun) { setState('standby'); }
 }
 
 function unlockSpeech() {
@@ -122,6 +185,7 @@ function unlockSpeech() {
 
 function say(text, isError) {
   $('reply').textContent = text;
+  if (isError) { report('error shown: ' + text); }
   if ($('speak').checked && $('jarvisvoice').checked && !isError && token) {
     setState('thinking');
     playJarvisVoice(text).catch(() => iosSay(text, isError));  // voice server off -> iOS voice
@@ -132,15 +196,36 @@ function say(text, isError) {
 
 function iosSay(text, isError) {
   if (!$('speak').checked || !('speechSynthesis' in window)) { setState(isError ? 'error' : 'standby'); return; }
+  const run = ++speechRun;
   speechSynthesis.cancel();
-  const u = new SpeechSynthesisUtterance(text);
-  u.lang = 'ru-RU';
+  audioMode('playback');
   if (!ruVoice) { pickVoice(); }
-  if (ruVoice) { u.voice = ruVoice; }
-  u.pitch = ruVoice && /Yuri|Юрий|Maxim|Pavel|Dmitri/i.test(ruVoice.name) ? 0.9 : 0.6;
-  u.onstart = () => setState(isError ? 'error' : 'speaking');
-  u.onend = u.onerror = () => setState(isError ? 'error' : 'standby');
-  speechSynthesis.speak(u);
+  const parts = splitSpeech(text, 160);
+  // iOS sometimes never fires onend: give up after a generous estimate so the app never hangs
+  setTimeout(() => {
+    if (run === speechRun && (speechSynthesis.speaking || speechSynthesis.pending)) {
+      speechSynthesis.cancel();
+      report('ios speech stuck');
+      setState(isError ? 'error' : 'standby');
+    }
+  }, 8000 + String(text).length * 110);
+  // one utterance per sentence, queued: a single long utterance is cut off by iOS
+  parts.forEach((part, i) => {
+    const u = new SpeechSynthesisUtterance(part);
+    u.lang = 'ru-RU';
+    if (ruVoice) { u.voice = ruVoice; }
+    u.pitch = ruVoice && /Yuri|Юрий|Maxim|Pavel|Dmitri/i.test(ruVoice.name) ? 0.9 : 0.6;
+    u.onstart = () => { if (run === speechRun) { setState(isError ? 'error' : 'speaking'); } };
+    if (i === parts.length - 1) { u.onend = () => { if (run === speechRun) { setState(isError ? 'error' : 'standby'); } }; }
+    u.onerror = () => { if (run === speechRun) { setState(isError ? 'error' : 'standby'); } };
+    speechSynthesis.speak(u);
+  });
+  if (!parts.length) { setState(isError ? 'error' : 'standby'); }
+}
+function stopSpeech() {  // barge-in: pressing the reactor silences JARVIS at once
+  speechRun++;
+  if ('speechSynthesis' in window) { speechSynthesis.cancel(); }
+  if (window.JarvisOrb) { JarvisOrb.setLevel(0); }
 }
 
 function online(ok, text) {
@@ -255,12 +340,15 @@ function showExtra(r) {
   }
 }
 
+let asking = false;  // one question at a time: a slow answer must not be sent again
 async function ask(ev) {
   ev.preventDefault();
   const text = $('say').value.trim();
-  if (!text) { return; }
+  if (!text || asking) { return; }
+  asking = true;
   unlockSpeech();  // must stay before the first await
   setState('thinking');
+  $('reply').textContent = 'Думаю… (обычный вопрос — до минуты)';
   $('extra').replaceChildren();
   try {
     const t0 = performance.now();
@@ -273,7 +361,7 @@ async function ask(ev) {
   } catch (e) {
     online(false, 'нет связи');
     say(e.message === 'auth' ? 'Ключ больше не действует.' : 'Нет связи: ' + e.message, true);
-  }
+  } finally { asking = false; }
 }
 
 async function setAwake(on) {
@@ -367,6 +455,8 @@ function micUI(on) {
 }
 async function startListen() {
   if (!navigator.mediaDevices || !window.MediaRecorder) { say('Этот iPhone не даёт записывать звук в приложении.', true); return; }
+  stopSpeech();  // talking over JARVIS silences it at once (both voices)
+  audioMode('play-and-record');
   unlockSpeech();  // must stay before the first await (iOS gesture rule)
   try {
     recStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
@@ -408,6 +498,7 @@ function stopListen() {
   cancelAnimationFrame(meter);
   if (rec && rec.state !== 'inactive') { rec.stop(); }
   if (recStream) { recStream.getTracks().forEach((t) => t.stop()); recStream = null; }
+  audioMode('playback');  // back to the loud speaker for the answer
   micUI(false);
 }
 async function sendAudio(blob) {

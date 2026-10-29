@@ -65,8 +65,9 @@ SCHEMA = {'type': 'object', 'properties': {
 def _ollama(messages, model=MODEL, timeout=60):
     c = http.client.HTTPConnection('127.0.0.1', 11434, timeout=timeout)
     try:
+        # same keep_alive as web_answer: a request without it resets the model's VRAM lifetime to 5 min
         body = {'model': model, 'messages': messages, 'stream': False, 'format': SCHEMA, 'think': False,
-                'options': {'temperature': 0, 'num_ctx': 4096}}
+                'keep_alive': '2h', 'options': {'temperature': 0, 'num_ctx': 4096}}
         c.request('POST', '/api/chat', body=json.dumps(body, ensure_ascii=False).encode('utf-8'),
                   headers={'Content-Type': 'application/json'})
         r = c.getresponse()

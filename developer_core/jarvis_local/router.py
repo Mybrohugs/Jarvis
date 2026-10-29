@@ -45,6 +45,10 @@ TASKS = {
     'screen-describe': 'write',  # local vision model reads the screen; approval like other pc-* tasks
     'web-answer': 'write',  # the question leaves the PC (own SearXNG -> search engines); answer is text only
     'app-open': 'write', 'file-open': 'write', 'desktop-show': 'write', 'windows-list': 'read',  # allowlisted apps
+    # Explorer: the owner's real folders (Downloads, Documents, ...); writes never overwrite and roll back
+    'explorer-list': 'read', 'explorer-duplicates': 'read', 'explorer-mkdir': 'write', 'explorer-sort': 'write',
+    'explorer-copy': 'write', 'explorer-move': 'write',
+    'chat-reply': 'read',  # greetings / thanks: a fixed polite reply, nothing runs or leaves the PC
 }
 
 
@@ -258,8 +262,44 @@ class UnifiedTaskRouter:
     def _windows_list(self):
         return self.apps.windows()
 
+    CHAT = {'greet': 'Здравствуйте, сэр. Чем могу помочь?',
+            'how': 'Всё в порядке, сэр, системы работают. Чем займёмся?',
+            'thanks': 'Всегда пожалуйста, сэр.',
+            'bye': 'До связи, сэр.'}
+
+    def _chat_reply(self, kind):
+        if kind not in self.CHAT:
+            raise Denied('Unknown chat reply')
+        return {'status': 'PASS', 'speech': self.CHAT[kind]}
+
+    @property
+    def explorer(self):
+        if not hasattr(self, '_explorer'):
+            from .explorer import Explorer
+            self._explorer = Explorer(self.ws)
+        return self._explorer
+
+    def _explorer_list(self, folder):
+        return self.explorer.listing(folder)
+
+    def _explorer_duplicates(self, folder):
+        return self.explorer.duplicates(folder)
+
+    def _explorer_mkdir(self, folder, name):
+        return self.explorer.mkdir(folder, name, self.session)
+
+    def _explorer_sort(self, folder):
+        return self.explorer.sort_apply(folder, self.session)
+
+    def _explorer_copy(self, src, name, dst):
+        return self.explorer.transfer('copy', src, name, dst, self.session)
+
+    def _explorer_move(self, src, name, dst):
+        return self.explorer.transfer('move', src, name, dst, self.session)
+
     def _web_answer(self, question):
-        self.session.confirm({'task': 'web-answer', 'question': question[:200], 'sent_to': 'SearXNG -> search engines'})
+        self.session.confirm({'task': 'web-answer', 'question': question[:200],
+                              'sent_to': 'SearXNG -> search engines; snippets -> Claude Haiku (if key set, ~$0.001)'})
         answer = getattr(self, 'web', None)
         if answer is None:
             from .web_answer import answer
@@ -501,9 +541,11 @@ class UnifiedTaskRouter:
         entry = self.ws.journal.find(entry_id)
         if entry.get('status') not in ('PASS', 'FAILED_OR_PARTIAL', 'VERIFY_FAILED'):
             raise Denied('Entry is not reversible')
-        prepared = plan_rollback(self.ws, entry)
+        outside = str(entry.get('task', '')).startswith('explorer-')  # real folders, not the workspace
+        prepared = self.explorer.plan_rollback(entry) if outside else plan_rollback(self.ws, entry)
         approved = self.session.confirm({'task': 'rollback', 'target': entry_id, 'of': entry['task'],
-                                         'steps': entry['rollback']})
-        done = execute_rollback(self.ws, entry_id, prepared)
+                                         'steps': entry['rollback'][:20]})
+        done = self.explorer.execute_rollback(entry_id, prepared) if outside else \
+            execute_rollback(self.ws, entry_id, prepared)
         self.ws.journal.record('rollback', 'PASS', target=entry_id, done=done, **approved)
         return {'status': 'PASS', 'target': entry_id, 'done': done}

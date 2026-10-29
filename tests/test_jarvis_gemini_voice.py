@@ -73,13 +73,42 @@ class GeminiVoiceTests(unittest.TestCase):
         with self.assertRaises(Denied):
             v.speak('Такой фразы в банке нет.')  # -> the reply stays text only
 
+    def test_long_answers_and_used_up_quota_use_the_local_voice(self):
+        import numpy as np
+        said = []
+
+        def piper(text):
+            said.append(text)
+            return np.zeros(1600), 16000
+        v = GeminiVoice('Schedar', keys=FakeKeys(), transport=self.transport, cache=Path(self.tmp.name),
+                        effect=None, bank=None, local=piper)
+        long = 'Кубит может быть в суперпозиции. ' * 12
+        self.assertEqual(v.speak(long)[:4], b'RIFF')
+        self.assertEqual((said, self.calls), ([long.strip()], []))  # whole answer, nothing sent to Gemini
+
+        def quota(*a):
+            raise Denied('Gemini HTTP 429 Rate limit exceeded')
+        v.transport = quota
+        self.assertEqual(v.speak('Короткий ответ.')[:4], b'RIFF')
+        self.assertEqual(said[-1], 'Короткий ответ.')
+
+    def test_used_up_quota_is_remembered_across_restarts(self):
+        def quota(path, body, key):
+            raise Denied('Gemini HTTP 429 Rate limit exceeded (limit: 10 requests per day on Free Tier)')
+        with self.assertRaises(Denied):
+            GeminiVoice('Schedar', keys=FakeKeys(), transport=quota, cache=Path(self.tmp.name), bank=None).speak('Раз.')
+        again = GeminiVoice('Schedar', keys=FakeKeys(), transport=lambda *a: self.fail('must not ask Gemini again'),
+                            cache=Path(self.tmp.name), bank=None)
+        with self.assertRaises(Denied):  # every model is resting after the restart too: nothing is sent
+            again.speak('Два.')
+
     def test_no_audio_and_bad_input_are_refused(self):
         with self.assertRaises(Denied):
             audio_from({'steps': [{'content': [{'type': 'text', 'text': 'no'}]}]})
         with self.assertRaises(Denied):
             GeminiVoice('NotAVoice', keys=FakeKeys(), transport=self.transport, cache=Path(self.tmp.name))
         with self.assertRaises(ValueError):
-            self.voice().speak('x' * 401)
+            self.voice().speak('x' * 1001)
 
     def test_used_up_quota_moves_to_the_next_model(self):
         tried = []
