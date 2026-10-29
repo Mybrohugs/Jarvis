@@ -185,7 +185,14 @@ def main():
     from faster_whisper import WhisperModel
     from openwakeword.model import Model
     wake = Model(wakeword_models=['hey_jarvis'], inference_framework='onnx')
-    stt = WhisperModel(a.whisper, device='cpu', compute_type='int8', cpu_threads=4)
+    whisper = WhisperModel(a.whisper, device='cpu', compute_type='int8', cpu_threads=4)
+    from .pwa_gateway import gigaam_text
+
+    def stt_text(audio):  # GigaAM on the GPU when its server runs, else Whisper on the CPU
+        text = gigaam_text(audio)
+        if text is None:
+            text = ' '.join(s.text for s in whisper.transcribe(audio, language='ru', beam_size=3, vad_filter=True)[0])
+        return text.strip()
     stream = sd.InputStream(samplerate=RATE, channels=1, dtype='int16', blocksize=FRAME)
     stream.start()
     read = lambda: stream.read(FRAME)[0][:, 0].copy()  # noqa: E731
@@ -197,9 +204,7 @@ def main():
             import keyboard
             from .dictation import Dictation
 
-            def transcribe(audio):
-                return ' '.join(s.text for s in stt.transcribe(audio, language='ru', beam_size=3, vad_filter=True)[0])
-            dictation = Dictation(transcribe, assistant.router.ws.state, assistant.router.ws.journal)
+            dictation = Dictation(stt_text, assistant.router.ws.state, assistant.router.ws.journal)
             held = lambda: keyboard.is_pressed(a.dictation_key)  # noqa: E731
         except ImportError:
             print('dictation off: pip install keyboard', flush=True)
@@ -226,8 +231,7 @@ def main():
         beep()
         audio = record_phrase(read).astype(np.float32) / 32768
         wake.reset()
-        segs, _ = stt.transcribe(audio, language='ru', beam_size=3, vad_filter=True)
-        text = ' '.join(s.text for s in segs).strip()
+        text = stt_text(audio)
         print('ВЫ:', text, flush=True)
         try:
             assistant.handle(text)

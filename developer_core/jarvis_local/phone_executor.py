@@ -21,6 +21,9 @@ ALLOWED = ('media-volume', 'media-mute', 'media-scene',
            'home-devices', 'home-switch', 'home-brightness', 'home-scenario', 'home-routine',  # Yandex lights/sockets
            'screen-describe',  # local vision model, the picture stays on the PC
            'web-answer',  # own SearXNG + local summary
+           'web-search', 'web-open', 'web-open-result', 'web-site-search', 'web-save',  # own browser; no downloads
+           'excel-summary', 'excel-column', 'excel-find', 'excel-open',  # read tables, open one; edits at the PC
+           'doc-read', 'doc-find', 'doc-open',  # documents: read and open; edits, PDFs and retelling at the PC
            'app-open', 'file-open', 'desktop-show', 'windows-list',  # allowlisted apps, folders, sites
            'chat-reply')  # greetings: a fixed reply
 PROFILE_KINDS = ('name', 'hobby', 'like', 'dislike', 'fact')
@@ -126,6 +129,41 @@ def validate(auto):
         if set(args) != {'question'} or not isinstance(args['question'], str) or not 2 <= len(args['question']) <= 300:
             raise Denied('Bad question')
         return task, {'question': args['question']}
+    if task == 'web-search':
+        if set(args) != {'query'} or not isinstance(args['query'], str) or not 2 <= len(args['query']) <= 300:
+            raise Denied('Bad query')
+        return task, {'query': args['query']}
+    if task == 'web-open':
+        if set(args) != {'url'} or not isinstance(args['url'], str) or not 4 <= len(args['url']) <= 500:
+            raise Denied('Bad site')
+        return task, {'url': args['url']}
+    if task == 'web-open-result':
+        if set(args) != {'index'} or type(args['index']) is not int or not 1 <= args['index'] <= 10:
+            raise Denied('Bad link number')
+        return task, {'index': args['index']}
+    if task == 'web-site-search':
+        from .web_ops import SITE_SEARCH
+        if set(args) != {'site', 'query'} or args['site'] not in SITE_SEARCH or not isinstance(args['query'], str) \
+                or not 1 <= len(args['query']) <= 200:
+            raise Denied('Bad site search')
+        return task, {'site': args['site'], 'query': args['query']}
+    if task in ('excel-summary', 'excel-column', 'excel-find', 'excel-open'):
+        need = {'excel-summary': {'name'}, 'excel-column': {'name', 'column', 'func'}, 'excel-find': {'name', 'text'},
+                'excel-open': {'name'}}[task]
+        if set(args) - {'sheet'} != need or any(not isinstance(args[k], str) or not 1 <= len(args[k]) <= 120 for k in args):
+            raise Denied('Bad table command')
+        if task == 'excel-column' and args['func'] not in ('sum', 'avg', 'max', 'min', 'count'):
+            raise Denied('Bad table function')
+        return task, dict(args)
+    if task in ('doc-read', 'doc-find', 'doc-open'):
+        need = {'name', 'text'} if task == 'doc-find' else {'name'}
+        if set(args) != need or any(not isinstance(args[k], str) or not 1 <= len(args[k]) <= 120 for k in args):
+            raise Denied('Bad document command')
+        return task, dict(args)
+    if task == 'web-save':
+        if args:
+            raise Denied('No arguments expected')
+        return task, {}
     if task == 'screen-describe':
         if set(args) - {'question'} or not isinstance(args.get('question', ''), str) or len(args.get('question', '')) > 300:
             raise Denied('Bad screen question')

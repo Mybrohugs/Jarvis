@@ -90,11 +90,137 @@ def explorer_clause(t, c, quoted):
     return None
 
 
+TABLE_FOLDERS = (('Desktop', r'на\s+рабоч\w+\s+стол\w*'), ('Downloads', r'в\s+загрузк\w*'), ('Documents', r'в\s+документ\w*'))
+COLUMN_FUNCS = (('sum', r'сумм\w*|итог\w*|сколько всего'), ('avg', r'средн\w*'), ('max', r'максимум\w*|максимальн\w*|наибольш\w*'),
+                ('min', r'минимум\w*|минимальн\w*|наименьш\w*'), ('count', r'количеств\w*|сколько чисел'))
+
+
+def _table_name(c):
+    """'...в таблице «Бюджет 2026»' / '...таблицу расходы' -> the spoken table name (no .xlsx: those are workspace files)."""
+    m = re.search(r'таблиц\w*\s+(?:excel\s+|эксель\s+)?(?:[«"“](.+?)[»"”]|([\wё\- ]+?))(?=\s+(?:с\s+(?:колонк|столбц)|на\s+лист|'
+                  r'в\s+(?:документ|загрузк)|на\s+рабоч|по\s+столбц|строк)|[,.!?]|$)', c, re.I)
+    if not m:
+        return None
+    name = (m.group(1) or m.group(2) or '').strip()
+    return name if name and not re.search(r'\.\w{2,5}$', name) and name.lower() not in ('её', 'ее', 'его', 'эту') else None
+
+
+def excel_clause(t, c, quoted):
+    """Excel phrases about the owner's real tables; None when the clause is about something else."""
+    if not re.search(r'таблиц', t):
+        return None
+    name = _table_name(c)
+    m = re.search(r'(?:создай|сделай|заведи)\s+(?:новую\s+)?таблиц\w*', t)
+    if m:
+        cols = re.search(r'(?:колонк\w*|столбц\w*)\s+(.+?)(?=\s+(?:в\s+(?:документ|загрузк)|на\s+рабоч)|$)', c, re.I)
+        if not name or not cols:
+            return {'intent': 'unknown', 'steps': [], 'reason': 'Скажите так: создай таблицу «Расходы» с колонками Дата, Сумма, Категория'}
+        heads = [h.strip(' «»"') for h in re.split(r',|;|\s+и\s+', cols.group(1)) if h.strip(' «»"')]
+        folder = next((k for k, pat in TABLE_FOLDERS if re.search(pat, t)), 'Documents')
+        return [_step('excel-create', name=name, headers=heads, folder=folder)]
+    if not name:
+        return None
+    if re.search(r'добав\w*\s+(?:в\s+.+?\s+)?строк', t):
+        src = quoted or (re.search(r'строк\w*\s+(.+?)\s+(?:в|к)\s+таблиц', c, re.I) or [None, None])[1]
+        if not src:
+            return {'intent': 'unknown', 'steps': [], 'reason': 'Какие значения добавить? Разделяйте «;»: добавь строку «29.10; 500; еда»'}
+        return [_step('excel-append', name=name, cells=[x.strip() for x in re.split(r'[;|]', src) if x.strip()])]
+    col = re.search(r'(?:столбц\w*|колонк\w*|графе?)\s+(?:[«"](.+?)[»"]|([\wё\-]+))', c, re.I)
+    if col:  # the function word is looked for outside the column name ("среднее по столбцу Сумма")
+        rest = re.sub(r'(?:столбц\w*|колонк\w*|графе?)\s+(?:[«"].+?[»"]|[\wё\-]+)', ' ', t)
+        func = next((f for f, pat in COLUMN_FUNCS if re.search(pat, rest)), None)
+        if func:
+            return [_step('excel-column', name=name, column=(col.group(1) or col.group(2)).strip(), func=func)]
+    if re.match(r'найди|поищи', t):
+        # "найди «такси» в таблице расходы" / "найди такси в таблице расходы" / "...в таблице расходы строки с такси"
+        m = re.match(r'(?:найди|поищи)\s+(?:[«"](.+?)[»"]|(.+?))\s+в\s+таблиц', c, re.I) or \
+            re.search(r'строк\w*\s+(?:с|где\s+есть|где)\s+(?:[«"](.+?)[»"]|(.+))$', c, re.I)
+        if m and (m.group(1) or m.group(2) or '').strip():
+            return [_step('excel-find', name=name, text=(m.group(1) or m.group(2)).strip(' «»"'))]
+        return {'intent': 'unknown', 'steps': [], 'reason': 'Скажите так: найди «такси» в таблице Расходы'}
+    if re.match(r'(?:открой|запусти)\b', t):
+        return [_step('excel-open', name=name)]
+    if re.match(r'(?:что|покажи|расскажи|сводк|опиши|сколько строк)', t):
+        return [_step('excel-summary', name=name)]
+    return None
+
+
+DOC_NOUN = r'(?:документ(?:а|е|у|ом)?|pdf|пдф|файл(?:а|е|у)?|скан(?:а|е)?)'
+DOC_STOP = (r'(?=\s+(?:в\s+(?:pdf|пдф|документ\w*|загрузк\w*)|на\s+рабоч|с\s+текстом|абзац|текст\b|слово|строк)'
+            r'|\s+[«"“]|[,.!?]|$)')
+
+
+def _doc_name(c):
+    """'документ «Договор аренды»' / 'pdf отчёт за май' -> the spoken name (no extension: those are workspace files).
+    'pdf из документа Письмо' -> 'Письмо', 'pdf скан паспорта' -> 'скан паспорта': the longest plausible name wins."""
+    # a lookahead, so "pdf из документа Письмо" also yields the overlapping "документа Письмо"
+    names = []
+    for m in re.finditer(r'(?=(?<![\wё])' + DOC_NOUN + r'\s+(?:word\s+|ворд\s+)?(?:[«"“](.+?)[»"”]|'
+                         r'([\wё\- ]+?))' + DOC_STOP + ')', c, re.I):
+        name = (m.group(1) or m.group(2) or '').strip()
+        if name and not re.search(r'\.\w{2,5}$', name) and not re.match(r'(?:из|в|во|на|с|для|и|или)\s', name, re.I) \
+                and not re.fullmatch(DOC_NOUN, name, re.I) and name.lower() not in ('его', 'её', 'ее', 'этот'):
+            names.append(name)
+    return max(names, key=len) if names else None
+
+
+def docs_merge_plan(text):
+    """'объедини pdf «Акт» и «Счёт»' -> one step (must run before the clause split on ' и ')."""
+    t = re.sub(r'^(джарвис|jarvis),?\s*', '', text.strip(), flags=re.I).strip(' .!?')
+    m = re.match(r'(?:объедини|склей|собери)\s+(?:в\s+один\s+)?(?:pdf|пдф|файлы\s+pdf)\w*\s+(.+)$', t, re.I)
+    if not m:
+        return []
+    quoted = re.findall(r'[«"“]([^»"”]+)[»"”]', m.group(1))
+    names = quoted or [x.strip() for x in re.split(r',|\s+и\s+', m.group(1)) if x.strip()]
+    return [_step('pdf-merge', names=names)] if 2 <= len(names) <= 10 else []
+
+
+def docs_clause(t, c, quoted):
+    """Word/PDF phrases about the owner's real documents; None when the clause is about something else."""
+    if not re.search(r'(?<![\wё])' + DOC_NOUN + r'(?![\wё])', t):
+        return None
+    m = re.search(r'(?:создай|сделай|напиши|заведи)\s+(?:новый\s+)?документ\w*', t)
+    if m:
+        name = _doc_name(c)
+        if not name:
+            return {'intent': 'unknown', 'steps': [], 'reason': 'Скажите так: создай документ «Письмо» с текстом «…»'}
+        body = re.search(r'с\s+текстом\s+[«"“](.+?)[»"”]', c, re.I)
+        folder = next((k for k, pat in TABLE_FOLDERS if re.search(pat, t)), 'Documents')
+        return [_step('doc-create', name=name, text=body.group(1) if body else '', folder=folder)]
+    name = _doc_name(c)
+    if not name:
+        return None
+    if re.search(r'(?:добавь|допиши|дополни)', t):
+        if not quoted:
+            return {'intent': 'unknown', 'steps': [], 'reason': 'Какой текст дописать? Например: допиши в документ Письмо «С уважением»'}
+        return [_step('doc-append', name=name, text=quoted)]
+    if re.search(r'распознай|сделай\s+текстов|оцифруй', t):
+        return [_step('pdf-ocr', name=name)]
+    if re.search(r'(?<![\wё])(?:pdf|пдф)(?![\wё])', t) and re.match(r'(?:сделай|сохрани|конверт|преврати|экспорт)', t):
+        return [_step('doc-pdf', name=name)]
+    if re.match(r'(?:найди|поищи)', t):
+        m = re.match(r'(?:найди|поищи)\s+(?:слово\s+)?(?:[«"](.+?)[»"]|(.+?))\s+в\s+' + DOC_NOUN + r'\b', c, re.I) or \
+            re.search(r'слово\s+(?:[«"](.+?)[»"]|(\S+))', c, re.I)
+        if m and (m.group(1) or m.group(2) or '').strip():
+            return [_step('doc-find', name=name, text=(m.group(1) or m.group(2)).strip(' «»"'))]
+        return None  # "найди файлы pdf и docx": a file search, not a search inside one document
+    if re.search(r'перескажи|кратко|о\s+ч[её]м', t):
+        return [_step('doc-summary', name=name)]
+    if re.match(r'(?:открой|запусти)\b', t):
+        return [_step('doc-open', name=name)]
+    if re.match(r'(?:прочитай|что\s+в|покажи|сколько\s+страниц|расскажи)', t):
+        return [_step('doc-read', name=name)]
+    return None
+
+
 def _clause(c):
     """One clause -> list of steps, or a refusal/unknown dict."""
     t = c.strip().lower().rstrip('.!?')
     paths = _paths(c)
     quoted = _quoted(c)
+    part = (excel_clause(t, c, quoted) or docs_clause(t, c, quoted)) if not paths else None
+    if part:
+        return part
     part = explorer_clause(t, c, quoted)
     if part:
         return part
@@ -111,7 +237,7 @@ def _clause(c):
     m = re.search(r'разреши\w* (?:сайт )?([a-z0-9.-]+\.[a-z]{2,})', t)
     if m:
         return [_step('browser-allow-host', host=m.group(1))]
-    m = re.search(r'(?:открой|прочитай|загрузи|покажи) (?:сайт|страницу) (?:https://)?([a-z0-9.-]+\.[a-z]{2,})(/\S*)?', t)
+    m = re.search(r'(?:прочитай|загрузи|покажи) (?:сайт|страницу) (?:https://)?([a-z0-9.-]+\.[a-z]{2,})(/\S*)?', t)
     if m:
         return [_step('browser-read', url='https://' + m.group(1) + (m.group(2) or '/'))]
     if re.search(r'блокнот', t):
@@ -311,10 +437,68 @@ def web_plan(text):
     m = re.match(r'^(?:найди|поищи|загугли|узнай|посмотри)\s+(?:мне\s+)?(?:в\s+интернете|в\s+сети|в\s+гугле|онлайн)'
                  r'\s*,?\s*(.{2,300})$', t, re.I) or re.match(r'^загугли\s+(.{2,300})$', t, re.I)
     if m:
-        return [_step('web-answer', question=m.group(1).strip())]
+        q = m.group(1).strip()
+        tail = re.match(r'^(.{2,300}?),?\s+(?:и|затем|потом|а потом)\s+(.+)$', q, re.I)
+        if tail:
+            rest = tail.group(2).strip().lower()
+            n = _result_number(rest)
+            if n:  # "...и открой первую ссылку"
+                return [_step('web-search', query=tail.group(1).strip()), _step('web-open-result', index=n)]
+            if re.fullmatch(r'(?:покажи|дай|назови|перечисли)\s+(?:мне\s+)?(?:ссылки|результаты|сайты)', rest):
+                return [_step('web-search', query=tail.group(1).strip())]
+            if re.fullmatch(r'сохрани\s*(?:это|его|ответ|результат)?\s*(?:в\s+(?:документы|файл))?', rest):
+                return [_step('web-answer', question=tail.group(1).strip()), _step('web-save')]
+        return [_step('web-answer', question=q)]
     m = re.match(r'^(?:что нового|какие новости|последние новости)\s+(?:про|о|об|в|по)\s+(.{2,200})$', t, re.I)
     if m:
         return [_step('web-answer', question='новости ' + m.group(1).strip())]
+    return []
+
+
+RESULT_ORDINALS = {'перв': 1, 'втор': 2, 'трет': 3, 'четв': 4, 'пят': 5, 'шест': 6}
+
+
+def _result_number(t):
+    """'открой первую ссылку' / 'открой ссылку 2' / 'открой второй результат' -> 2; else 0."""
+    m = re.fullmatch(r'открой\s+(?:(\d)(?:-?(?:ю|й|ую))?\s+|(перв|втор|трет|четв|пят|шест)\w*\s+)?'
+                     r'(?:ссылк\w*|результат\w*|сайт)(?:\s+(?:номер\s+)?(\d))?', t.strip(' .!?'))
+    if not m:
+        return 0
+    if m.group(1) or m.group(3):
+        return int(m.group(1) or m.group(3))
+    return RESULT_ORDINALS.get(m.group(2), 0)
+
+
+DOC_EXT = r'(?:txt|md|csv|json|docx?|xlsx?|xlsm|pptx?|pdf|log|rtf|odt|zip|rar|7z|jpg|jpeg|png|mp3|mp4)'
+
+
+def browser_plan(text):
+    """Browser operator phrases (own browser): links from the last search, any site, search on a site,
+    download a file, save the last web answer."""
+    from .web_ops import SPOKEN_SITES
+    raw = re.sub(r'^(джарвис|jarvis),?\s*', '', text.strip(), flags=re.I).strip(' .!?')
+    low = raw.lower()
+    n = _result_number(low)
+    if n:
+        return [_step('web-open-result', index=n)]
+    if re.fullmatch(r'сохрани\s+(?:этот\s+|последний\s+)?(?:ответ|это|найденное|результат)(?:\s+в\s+(?:документы|файл))?'
+                    r'|сохрани\s+в\s+(?:документы|файл)', low):
+        return [_step('web-save')]
+    m = re.fullmatch(r'(?:скачай|загрузи)\s+(?:мне\s+)?(?:файл\s+)?(?:по\s+ссылке\s+)?(https://\S+?)(?:\s+в\s+загрузки)?', raw, re.I)
+    if m:
+        return [_step('web-download', url=m.group(1))]
+    m = re.fullmatch(r'(?:открой|зайди на|перейди на)\s+(?:сайт\s+)?((?:https?://)?(?:[a-z0-9-]+\.)+[a-z]{2,24}(?:/\S*)?)', raw, re.I)
+    if m and not re.search(r'\.' + DOC_EXT + r'$', m.group(1), re.I):
+        url = m.group(1) if re.match(r'^https?://', m.group(1), re.I) else 'https://' + m.group(1)
+        return [_step('web-open', url=url)]
+    sites = '|'.join('(?P<%s>%s)' % kv for kv in SPOKEN_SITES)
+    verbs = r'(?:найди|поищи|ищи|покажи|включи|открой|посмотри)\s+(?:мне\s+)?'
+    m = re.fullmatch(verbs + r'(?:на|в)\s+(?:%s)\s+(?P<q>.{1,200})' % sites, low) or \
+        re.fullmatch(verbs + r'(?P<q>.{1,200}?)\s+(?:на|в)\s+(?:%s)' % sites, low)
+    if m:
+        site = next(k for k, _ in SPOKEN_SITES if m.group(k))
+        q = raw[m.start('q'):m.end('q')].strip(' «»"')
+        return [_step('web-site-search', site=site, query=q)]
     return []
 
 
@@ -380,7 +564,8 @@ def understand(text):
     rest = re.sub(r'^\s*(?:%s)[\s,!.]+(?:(?:джарвис|jarvis)[\s,!.]+)?' % GREET, '', text, flags=re.I)
     if rest != text and rest.strip():
         text = rest
-    steps = reminder_plan(text) or music_plan(text) or home_plan(text) or web_plan(text) or apps_plan(text)
+    steps = reminder_plan(text) or music_plan(text) or home_plan(text) or web_plan(text) or browser_plan(text) or \
+        docs_merge_plan(text) or apps_plan(text)
     if steps:
         return {'intent': 'plan', 'steps': steps, 'summary': describe(steps)}
     if not DANGEROUS.search(re.sub(QUOTED, ' ', text)):
@@ -403,11 +588,18 @@ def understand(text):
     if UNSUPPORTED.search(unquoted):
         return {'intent': 'refused', 'steps': [], 'reason': 'Отправка сообщений и публикация пока не подключены.'}
     # Split "A и B" / "A, затем B" into clauses, but never inside quotes.
-    protected = re.sub(QUOTED, lambda m: m.group(0).replace(' и ', ' \x00 ').replace(',', '\x01'), text)
-    clauses = [c.replace('\x00', 'и').replace('\x01', ',')
+    protected = re.sub(QUOTED, lambda m: m.group(0).replace(' и ', ' \x00 ').replace(',', '\x01').replace(';', '\x02'), text)
+    clauses = [c.replace('\x00', 'и').replace('\x01', ',').replace('\x02', ';')
                for c in re.split(r',?\s+(?:и|затем|потом|после этого)\s+(?=[а-яё]{3,}\w*\b)|;\s*(?=[а-яё])', protected)]
-    steps, last_dst, last_folder = [], None, None
+    steps, last_dst, last_folder, last_table, last_doc = [], None, None, None, None
     for c in clauses:
+        if last_table and not re.search(r'таблиц', c.lower()) and \
+                re.search(r'строк|столбц|колонк|^\s*(?:открой|покажи)\s+(?:её|ее|его)\b', c.lower()):
+            c = re.sub(r'\s+(?:её|ее|его)\b', '', c) + ' в таблице «%s»' % last_table  # "...и открой её"
+        elif last_doc and not _doc_name(c) and \
+                re.search(r'(?:pdf|пдф)|допиши|перескажи|^\s*(?:открой|покажи)\s+(?:его|её|ее)\b', c.lower()):
+            # "...и сделай из него pdf" / "...и открой его" -> the document named before
+            c = re.sub(r'\s+(?:из\s+)?(?:него|неё|нее|его|её|ее)\b', '', c) + ' документ «%s»' % last_doc
         if last_dst and re.search(r'результат|её|ее|его|копию', c.lower()) and not _paths(c):
             c = c + ' ' + last_dst
         if last_folder and not _folders(c.lower()) and re.search(r'покажи|что получилось|результат', c.lower()):
@@ -429,6 +621,10 @@ def understand(text):
                 last_dst = s['args']['entries'][-1]['dst']
             elif s['task'].startswith('explorer-'):
                 last_folder = s['args'].get('folder') or s['args'].get('dst')
+            elif s['task'].startswith('excel-'):
+                last_table = s['args']['name']
+            elif s['task'].startswith('doc-') or s['task'] == 'pdf-ocr':
+                last_doc = s['args']['name']
         steps.extend(part)
     plan = {'intent': 'plan', 'steps': steps, 'summary': describe(steps)}
     validate_plan(plan)
@@ -463,7 +659,18 @@ NAMES = {'status': 'показать статус', 'audit': 'показать �
          'explorer-list': 'показать, что в папке', 'explorer-duplicates': 'найти одинаковые файлы (без удаления)',
          'explorer-mkdir': 'создать папку', 'explorer-sort': 'разложить файлы по папкам-типам (с отменой)',
          'chat-reply': 'ответить на приветствие',
-         'explorer-copy': 'скопировать файл между папками', 'explorer-move': 'перенести файл между папками (с отменой)'}
+         'explorer-copy': 'скопировать файл между папками', 'explorer-move': 'перенести файл между папками (с отменой)',
+         'excel-summary': 'рассказать, что в таблице', 'excel-column': 'посчитать по столбцу таблицы',
+         'excel-find': 'найти строки в таблице', 'excel-create': 'создать таблицу Excel (с отменой)',
+         'excel-append': 'добавить строку в таблицу (резервная копия, с отменой)', 'excel-open': 'открыть таблицу в Excel',
+         'doc-read': 'рассказать, что в документе', 'doc-find': 'найти слово в документе',
+         'doc-summary': 'пересказать документ (текст уходит в Claude/Qwen)', 'doc-create': 'создать документ Word (с отменой)',
+         'doc-append': 'дописать абзац (резервная копия, с отменой)', 'doc-pdf': 'сохранить документ в PDF (с отменой)',
+         'pdf-merge': 'объединить PDF в новый файл (с отменой)', 'pdf-ocr': 'распознать скан в текстовый PDF (с отменой)',
+         'doc-open': 'открыть документ',
+         'web-search': 'найти ссылки в интернете', 'web-open': 'открыть сайт в браузере',
+         'web-open-result': 'открыть ссылку из найденного', 'web-site-search': 'искать на сайте в браузере',
+         'web-download': 'скачать файл в Загрузки (с отменой)', 'web-save': 'сохранить ответ в Документы (с отменой)'}
 
 
 def describe(steps):

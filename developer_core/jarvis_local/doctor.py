@@ -138,6 +138,50 @@ class Doctor:
             return 'WARN', detail + '; для колонки нет сценария: ' + ', '.join(missing), 'создайте в «Доме с Алисой»'
         return 'PASS', detail, None
 
+    def speech_recognition(self):
+        try:
+            code = self.http_ok(10792, '/health')
+        except OSError:
+            code = None
+        if code == 200:
+            return 'PASS', 'распознавание речи: GigaAM на видеокарте', None
+        return 'WARN', 'распознавание речи: GigaAM не запущен, работает медленный Whisper', 'запустите ' + START
+
+    def office_tools(self):
+        """Word (for 'сохрани в pdf') and the OCRmyPDF image (for 'распознай pdf')."""
+        import winreg
+        try:
+            winreg.CloseKey(winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, r'Word.Application\CurVer'))
+            word = True
+        except OSError:
+            word = False
+        from .docs_ops import OCR_IMAGE
+        docker = shutil.which('docker') or r'%s\Programs\DockerDesktop\resources\bin\docker.exe' % __import__('os').environ.get(
+            'LOCALAPPDATA', '')
+        try:
+            ocr = self.run([docker, 'image', 'inspect', OCR_IMAGE], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           timeout=15).returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            ocr = False
+        missing = [x for x, ok in (('Word (PDF из документов)', word), ('OCRmyPDF (распознавание сканов)', ocr)) if not ok]
+        if not missing:
+            return 'PASS', 'документы: Word и распознавание сканов готовы', None
+        return 'WARN', 'документы: нет ' + ', '.join(missing), (
+            'docker build -t jarvis-ocrmypdf Documents\\Codex\\JARVIS-addons\\ocrmypdf' if not ocr else None)
+
+    def web_apps(self):
+        """Owner's own web apps on this PC: Open WebUI (chat with local models), Paperless (document archive)."""
+        down = []
+        for port, title in ((3000, 'Open WebUI'), (8010, 'Paperless')):
+            try:
+                if self.http_ok(port, '/') not in (200, 302):
+                    down.append(title)
+            except OSError:
+                down.append(title)
+        if not down:
+            return 'PASS', 'Open WebUI и Paperless: работают', None
+        return 'WARN', 'не отвечает: ' + ', '.join(down), 'запустите Docker Desktop'
+
     def report(self):
         checks = [self._check('V8/Office', self.v8), self._check('Журнал', self.journal),
                   self._check('Телевизор', self.tv), self._check('Шлюз iPhone', self.service(10790, 'шлюз iPhone')),
@@ -145,7 +189,9 @@ class Doctor:
                   self._check('Исполнитель', self.executor), self._check('Tailscale', self.tailscale),
                   self._check('Диск', self.disk), self._check('Уведомления', self.push),
                   self._check('Поиск', self.search), self._check('Модели', self.local_models),
-                  self._check('Ключи', self.cloud_keys), self._check('Умный дом', self.smart_home)]
+                  self._check('Ключи', self.cloud_keys), self._check('Умный дом', self.smart_home),
+                  self._check('Распознавание речи', self.speech_recognition),
+                  self._check('Документы', self.office_tools), self._check('Веб-приложения', self.web_apps)]
         fails = [c for c in checks if c['status'] == 'FAIL']
         warns = [c for c in checks if c['status'] == 'WARN']
         if not fails and not warns:

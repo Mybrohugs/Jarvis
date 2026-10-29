@@ -301,21 +301,44 @@ def decode_audio(data, rate=16000, limit_s=60):
     return np.concatenate(parts).astype(np.float32) / 32768
 
 
-class Listener:
-    """Push-to-talk from the phone: audio -> text on this PC (faster-whisper, CPU). Text only, nothing is run.
-    The audio is decoded in memory and never saved; one phrase at a time."""
+GIGAAM = ('127.0.0.1', 10792)  # gigaam_server.py in the speech venv (GPU); measured 0.3 s vs ~6 s for Whisper on CPU
 
-    def __init__(self, model='small'):
+
+def gigaam_text(audio, addr=GIGAAM, timeout=15):
+    """16 kHz float32 audio -> text from the local GigaAM server, or None when it is not running."""
+    import http.client
+    conn = http.client.HTTPConnection(addr[0], addr[1], timeout=timeout)
+    try:
+        conn.request('POST', '/stt', body=audio.astype('<f4').tobytes(),
+                     headers={'Content-Type': 'application/octet-stream'})
+        r = conn.getresponse()
+        data = json.loads(r.read(100_000) or b'{}')
+        return data.get('text', '').strip() if r.status == 200 else None
+    except (OSError, ValueError, http.client.HTTPException):
+        return None
+    finally:
+        conn.close()
+
+
+class Listener:
+    """Push-to-talk from the phone: audio -> text on this PC (GigaAM on the GPU, else faster-whisper on the CPU).
+    Text only, nothing is run. The audio is decoded in memory and never saved; one phrase at a time."""
+
+    def __init__(self, model='small', gigaam=gigaam_text):
         self.model, self.stt, self.lock = model, None, threading.Lock()
+        self.gigaam = gigaam
 
     def __call__(self, data):
         if not self.lock.acquire(blocking=False):
             raise BlockingIOError('busy')
         try:
+            audio = decode_audio(data)
+            text = self.gigaam(audio) if self.gigaam else None
+            if text is not None:
+                return text[:MAX_REQUEST]
             if self.stt is None:
                 from faster_whisper import WhisperModel
                 self.stt = WhisperModel(self.model, device='cpu', compute_type='int8', cpu_threads=4)
-            audio = decode_audio(data)
             segments, _ = self.stt.transcribe(audio, language='ru', beam_size=3, vad_filter=True)
             return ' '.join(seg.text for seg in segments).strip()[:MAX_REQUEST]
         finally:

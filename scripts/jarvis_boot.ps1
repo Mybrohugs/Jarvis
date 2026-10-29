@@ -30,13 +30,19 @@ function Test-Port([int]$p) {
 }
 function Get-Desktop { Get-CimInstance Win32_Process -Filter "Name like 'python%'" | Where-Object { $_.CommandLine -match 'JARVIS-copy\\main\.py' } }
 # python workers plus the minimized "-NoExit" consoles that host them (else every restart leaves a console behind)
-function Get-PhonePids { Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^(python|pythonw|powershell)\.exe$' -and $_.ProcessId -ne $PID -and $_.CommandLine -match 'jarvis_local\.(pwa_gateway|phone_executor|gemini_voice)|voice_server\.py' } }
+function Get-PhonePids { Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^(python|pythonw|powershell)\.exe$' -and $_.ProcessId -ne $PID -and $_.CommandLine -match 'jarvis_local\.(pwa_gateway|phone_executor|gemini_voice)|voice_server\.py|gigaam_server\.py' } }
 
 function Start-Phone {
     # kill half-alive leftovers so a restart never runs two executors
     Get-PhonePids | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     $out = & (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -NoProfile -ExecutionPolicy Bypass -File $phone -NoVoiceLoop 2>&1 | Out-String
     Log ("phone start: " + ($out -replace '\s+', ' ').Trim())
+}
+# GigaAM speech recognition (GPU) restarts on its own; the phone start launches it too
+$speechPy = Join-Path $env:USERPROFILE 'Documents\Codex\JARVIS-addons\.venv-speech\Scripts\python.exe'
+function Start-GigaAM {
+    $gs = "& '$speechPy' -I '$(Join-Path $dev 'developer_core\jarvis_local\gigaam_server.py')' --port 10792"
+    Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -ArgumentList @('-NoProfile','-NoExit','-Command',$gs) -WindowStyle Minimized
 }
 # web answers need the owner's SearXNG container (Docker Desktop, 127.0.0.1:8888)
 $dockerApp = Join-Path $env:LOCALAPPDATA 'Programs\DockerDesktop\Docker Desktop.exe'
@@ -80,6 +86,8 @@ Log ("network: dns={0} tailscale={1}" -f $dns, $tsOk)
 
 # warm the local answer model so the first phone question takes ~10 s, not ~45 s (cold load into VRAM)
 function Warm-Model {
+    # right after logon Ollama itself may still be starting (2026-10-29: warm failed at 00:31): wait for it first
+    for ($i = 0; $i -lt 30 -and -not (Test-Port 11434); $i++) { Start-Sleep 2 }
     try {
         $body = '{"model":"qwen3:8b","prompt":"","keep_alive":"2h"}'
         Invoke-RestMethod -Uri 'http://127.0.0.1:11434/api/generate' -Method Post -Body $body -ContentType 'application/json' -TimeoutSec 120 | Out-Null
@@ -100,7 +108,10 @@ $gaveUp = @{}
 while ($true) {
     if (-not (Test-Port 10790)) {
         if (Allow 'phone') { Log 'gateway down -> start phone side'; Start-Phone } elseif (-not $gaveUp.phone) { Log 'phone side keeps failing: gave up for 10 min'; $gaveUp.phone = 1 }
-    } else { $gaveUp.phone = 0 }
+    } else {
+        $gaveUp.phone = 0
+        if ((Test-Path -LiteralPath $speechPy) -and -not (Test-Port 10792) -and -not (Get-CimInstance Win32_Process -Filter "Name like 'python%'" | Where-Object { $_.CommandLine -match 'gigaam_server\.py' }) -and (Allow 'gigaam')) { Log 'gigaam down -> start'; Start-GigaAM }
+    }
     if (-not $NoDesktop -and -not (Get-Desktop)) {
         if (Allow 'desktop') { Log 'desktop app not running -> start'; Start-Desktop } elseif (-not $gaveUp.desktop) { Log 'desktop app keeps crashing: gave up for 10 min, see desktop.err.log'; $gaveUp.desktop = 1 }
     } else { $gaveUp.desktop = 0 }

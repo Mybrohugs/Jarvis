@@ -139,6 +139,43 @@ class Explorer:
             raise Denied('В папке «%s» нет файла «%s»' % (TITLES[key], name))
         raise Denied('Подходит несколько файлов: %s. Назовите точнее.' % ', '.join(p.name for p in hits[:5]))
 
+    def find_named(self, name, exts, roots, nouns=('файл', 'файлов')):
+        """A spoken file name -> (root key, path) across several allowed folders, one level deep.
+        Exact name (with or without extension) first, else the only file whose name has all the words.
+        nouns: accusative singular and genitive plural for the messages ('таблицу', 'таблиц')."""
+        name = str(name or '').strip(' «»"\'.')
+        if not 1 <= len(name) <= 120:
+            raise Denied('Назовите %s' % nouns[0])
+        stem = name.lower()
+        for ext in exts:
+            if stem.endswith(ext):
+                stem = stem[:-len(ext)]
+        exact, partial = [], []
+        for key in roots:
+            try:
+                base = self.root(key)
+            except Denied:
+                continue
+            for depth in (0, 1):
+                for ext in exts:
+                    for p in base.glob(('*/*' if depth else '*') + ext):
+                        if p.name.startswith('~$') or _is_link(p) or (depth and _is_link(p.parent)) or not p.is_file():
+                            continue
+                        low = p.stem.lower()
+                        if low == stem:
+                            exact.append((key, p))
+                        elif all(w in low for w in stem.split()):
+                            partial.append((key, p))
+        hits = exact or partial
+        if len(hits) > 1 and len({(p.parent, p.stem.lower()) for _, p in hits}) == 1:
+            # "Письмо.docx" and "Письмо.pdf" side by side: the first kind in exts wins (the source document)
+            hits = [min(hits, key=lambda kp: exts.index(kp[1].suffix.lower()) if kp[1].suffix.lower() in exts else 99)]
+        if not hits:
+            raise Denied('Не нашёл %s «%s» в папках: %s' % (nouns[0], name, ', '.join(TITLES[k] for k in roots)))
+        if len(hits) > 1:
+            raise Denied('Подходит несколько %s: %s. Назовите точнее.' % (nouns[1], ', '.join(p.name for _, p in hits[:5])))
+        return hits[0]
+
     # ---- read ----
     def listing(self, key, limit=15):
         base = self.root(key)
@@ -327,6 +364,12 @@ class Explorer:
                 if back.exists() or sha256(p) != step['sha256']:
                     raise Denied('Не могу безопасно вернуть: ' + step['path'])
                 prepared.append((kind, (p, back), step))
+            elif kind == 'excel_restore':
+                from .excel_ops import ExcelOps
+                prepared.append((kind, ExcelOps(self.ws, explorer=self, titles=list).plan_restore(step), step))
+            elif kind == 'doc_restore':
+                from .docs_ops import DocsOps
+                prepared.append((kind, DocsOps(self.ws, explorer=self, titles=list).plan_restore(step), step))
             else:
                 raise Denied('Unknown rollback step')
         if not prepared:
@@ -351,6 +394,9 @@ class Explorer:
                 q.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(target), str(q / target.name))
                 done.append({'quarantined': step['path']})
+            elif kind in ('excel_restore', 'doc_restore'):
+                from .excel_ops import ExcelOps
+                done.append(ExcelOps.restore(*target))  # same verified copy-back for tables and documents
             else:
                 p, back = target
                 if os.stat(p).st_dev == os.stat(back.parent).st_dev:

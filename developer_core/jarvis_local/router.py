@@ -48,6 +48,15 @@ TASKS = {
     # Explorer: the owner's real folders (Downloads, Documents, ...); writes never overwrite and roll back
     'explorer-list': 'read', 'explorer-duplicates': 'read', 'explorer-mkdir': 'write', 'explorer-sort': 'write',
     'explorer-copy': 'write', 'explorer-move': 'write',
+    # Browser operator: the owner's own browser; downloads/saved answers roll back like Explorer copies
+    'web-search': 'write', 'web-open': 'write', 'web-open-result': 'write', 'web-site-search': 'write',
+    'web-download': 'write', 'web-save': 'write',
+    # Excel: the owner's real tables (Documents/Desktop/Downloads); edits keep a backup and roll back
+    'excel-summary': 'read', 'excel-column': 'read', 'excel-find': 'read',
+    'excel-create': 'write', 'excel-append': 'write', 'excel-open': 'write',
+    # Word/PDF: the same folders; new files never overwrite, edits keep a backup; retelling sends text out
+    'doc-read': 'read', 'doc-find': 'read', 'doc-summary': 'write', 'doc-create': 'write', 'doc-append': 'write',
+    'doc-pdf': 'write', 'pdf-merge': 'write', 'pdf-ocr': 'write', 'doc-open': 'write',
     'chat-reply': 'read',  # greetings / thanks: a fixed polite reply, nothing runs or leaves the PC
 }
 
@@ -306,7 +315,105 @@ class UnifiedTaskRouter:
         result = answer(question)
         self.ws.journal.record('web-answer', 'PASS', chars=len(question), sources=[s['url'] for s in result['sources']],
                                rollback=[])
+        import json, time  # "...и сохрани в документы" saves exactly this answer
+        (self.ws.state / 'web_last_answer.json').write_text(json.dumps(
+            {'question': question, 'text': result.get('text') or result['speech'], 'at': time.time()},
+            ensure_ascii=False), encoding='utf-8')
         return result
+
+    @property
+    def docs(self):
+        if not hasattr(self, '_docs_ops'):
+            from .docs_ops import DocsOps
+            self._docs_ops = DocsOps(self.ws, explorer=self.explorer)
+        return self._docs_ops
+
+    def _doc_read(self, name):
+        return self.docs.read(name)
+
+    def _doc_find(self, name, text):
+        return self.docs.find_text(name, text)
+
+    def _doc_summary(self, name):
+        return self.docs.summary(name, self.session)
+
+    def _doc_create(self, name, text='', folder='Documents'):
+        return self.docs.create(name, text, self.session, folder)
+
+    def _doc_append(self, name, text):
+        return self.docs.append(name, text, self.session)
+
+    def _doc_pdf(self, name):
+        return self.docs.to_pdf(name, self.session)
+
+    def _pdf_merge(self, names):
+        return self.docs.merge(names, self.session)
+
+    def _pdf_ocr(self, name):
+        return self.docs.ocr(name, self.session)
+
+    def _doc_open(self, name):
+        self.docs.find(name)  # refuse before asking for approval
+        self.session.confirm({'task': 'doc-open', 'name': name[:60]})
+        return self.docs.open(name)
+
+    @property
+    def excel(self):
+        if not hasattr(self, '_excel_ops'):
+            from .excel_ops import ExcelOps
+            self._excel_ops = ExcelOps(self.ws, explorer=self.explorer)
+        return self._excel_ops
+
+    def _excel_summary(self, name, sheet=''):
+        return self.excel.summary(name, sheet)
+
+    def _excel_column(self, name, column, func='sum', sheet=''):
+        return self.excel.column(name, column, func, sheet)
+
+    def _excel_find(self, name, text, sheet=''):
+        return self.excel.find_rows(name, text, sheet)
+
+    def _excel_create(self, name, headers, folder='Documents'):
+        return self.excel.create(name, headers, self.session, folder)
+
+    def _excel_append(self, name, cells, sheet=''):
+        return self.excel.append(name, cells, self.session, sheet)
+
+    def _excel_open(self, name):
+        self.excel.find(name)  # refuse before asking for approval
+        self.session.confirm({'task': 'excel-open', 'name': name[:60]})
+        return self.excel.open(name)
+
+    @property
+    def webops(self):
+        if not hasattr(self, '_web_ops'):
+            from .web_ops import WebOps
+            self._web_ops = WebOps(self.ws, explorer=self.explorer)
+        return self._web_ops
+
+    def _web_search(self, query):
+        self.session.confirm({'task': 'web-search', 'query': query[:200], 'sent_to': 'SearXNG -> search engines'})
+        return self.webops.search(query)
+
+    def _web_open(self, url):
+        from .web_ops import clean_url
+        url = clean_url(url)  # refuse before asking for approval
+        self.session.confirm({'task': 'web-open', 'url': url})
+        return self.webops.open_url(url)
+
+    def _web_open_result(self, index):
+        self.session.confirm({'task': 'web-open-result', 'index': index})
+        return self.webops.open_result(index)
+
+    def _web_site_search(self, site, query):
+        self.session.confirm({'task': 'web-site-search', 'site': site, 'query': query[:200]})
+        return self.webops.site_search(site, query)
+
+    def _web_download(self, url):
+        return self.webops.download(url, self.session)
+
+    def _web_save(self, name=''):
+        return self.webops.save_answer(self.session, name)
 
     def _pc_screen(self):
         return self._pc('pc-screen', lambda pc: pc.screen())
@@ -541,7 +648,8 @@ class UnifiedTaskRouter:
         entry = self.ws.journal.find(entry_id)
         if entry.get('status') not in ('PASS', 'FAILED_OR_PARTIAL', 'VERIFY_FAILED'):
             raise Denied('Entry is not reversible')
-        outside = str(entry.get('task', '')).startswith('explorer-')  # real folders, not the workspace
+        outside = str(entry.get('task', '')).startswith(('explorer-', 'excel-', 'doc-', 'pdf-')) or \
+            entry.get('task') in ('web-download', 'web-save')  # real folders, not the workspace
         prepared = self.explorer.plan_rollback(entry) if outside else plan_rollback(self.ws, entry)
         approved = self.session.confirm({'task': 'rollback', 'target': entry_id, 'of': entry['task'],
                                          'steps': entry['rollback'][:20]})

@@ -267,11 +267,11 @@
   "say": "открой сайт python.org",
   "intent": "plan",
   "tasks": [
-   "browser-read"
+   "web-open"
   ],
   "args": [
    {
-    "url": "https://python.org/"
+    "url": "https://python.org"
    }
   ]
  },
@@ -704,6 +704,18 @@
   "args": [
    {
     "name": "evening"
+   }
+  ]
+ },
+ {
+  "say": "прочитай сайт python.org",
+  "intent": "plan",
+  "tasks": [
+   "browser-read"
+  ],
+  "args": [
+   {
+    "url": "https://python.org/"
    }
   ]
  }

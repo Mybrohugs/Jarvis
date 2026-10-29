@@ -23,6 +23,14 @@ if ($origin -match '^https://[a-z0-9.-]+$') { $gw += " --allow-origin '$origin'"
 $ex = $common + "& '$py' -B -m developer_core.jarvis_local.phone_executor --workspace '$ws'"
 Start-Process -FilePath $ps -ArgumentList @('-NoProfile','-NoExit','-Command',$gw) -WindowStyle Minimized
 Start-Process -FilePath $ps -ArgumentList @('-NoProfile','-NoExit','-Command',$ex) -WindowStyle Minimized
+# 2b) GigaAM speech recognition on the GPU (127.0.0.1:10792), if the speech venv is installed;
+#     the gateway and the voice loop fall back to Whisper on the CPU without it
+$spy = Join-Path $env:USERPROFILE 'Documents\Codex\JARVIS-addons\.venv-speech\Scripts\python.exe'
+if (Test-Path -LiteralPath $spy) {
+    $gs = "`$env:PYTHONIOENCODING='utf-8'; `$env:PYTHONUNBUFFERED='1'; & '$spy' -I '$dev\developer_core\jarvis_local\gigaam_server.py' --port 10792"
+    Start-Process -FilePath $ps -ArgumentList @('-NoProfile','-NoExit','-Command',$gs) -WindowStyle Minimized
+    Write-Host 'GigaAM speech recognition starting (GPU).'
+}
 # 3) voice server: the user's own cloned voice (stark-metal-2) on 127.0.0.1:10791, if installed
 $voice = Join-Path $env:USERPROFILE 'Documents\Codex\JARVIS-my-voice'
 $vpy = Join-Path $voice '.venv-clone\Scripts\python.exe'
