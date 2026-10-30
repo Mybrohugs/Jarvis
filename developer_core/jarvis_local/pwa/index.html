@@ -60,6 +60,15 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h15M13 6l6 6-6 6"/></svg>
       </button>
     </form>
+    <details class="tvpanel">
+      <summary>Видео на телевизоре</summary>
+      <p class="muted small">Ссылка YouTube или прямая ссылка MP4/WebM/M3U8. Нужны исполнитель JARVIS на ПК и настроенный телевизор с Google Cast.</p>
+      <form id="tvform" class="askbar">
+        <input id="tvurl" type="url" maxlength="2000" required placeholder="https://…" aria-label="Ссылка на видео" autocomplete="off" enterkeyhint="send">
+        <button id="tvsend" type="submit">На ТВ</button>
+      </form>
+      <p id="tvmsg" class="muted small" role="status" aria-live="polite">Ссылка отправляется только кнопкой «На ТВ». Воспроизведение зависит от телевизора и видео.</p>
+    </details>
   </section>
 
   <section id="summary" class="pane" hidden><div id="summary-body" class="cards"></div></section>
