@@ -3,6 +3,7 @@ import base64
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 from developer_core.jarvis_local.gemini_voice import GeminiVoice, audio_from, pcm_to_wav, request_body
 from developer_core.jarvis_local.session import Denied
 
@@ -13,6 +14,25 @@ class FakeKeys:
 
 
 class GeminiVoiceTests(unittest.TestCase):
+    def test_local_voice_preserves_long_sentences(self):
+        import numpy as np
+        from developer_core.jarvis_local.gemini_voice import piper_local
+        for text in ('длинное слово ' * 70, 'я' * 1000, 'Первая фраза. ' + 'я' * 700 + '! Конец.'):
+            with self.subTest(text=text[:30]), patch(
+                    'developer_core.jarvis_local.gemini_voice._piper_once',
+                    return_value=np.zeros(10)) as synth:
+                audio, rate = piper_local(text)
+                parts = [call.args[0] for call in synth.call_args_list]
+                self.assertEqual(''.join(''.join(parts).split()), ''.join(text.split()))
+                self.assertTrue(all(0 < len(part) <= 500 for part in parts))
+                self.assertGreater(len(audio), 0)
+                self.assertEqual(rate, 16000)
+
+    def test_local_voice_rejects_empty_text(self):
+        from developer_core.jarvis_local.gemini_voice import piper_local
+        with self.assertRaises(Denied):
+            piper_local('   ')
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
