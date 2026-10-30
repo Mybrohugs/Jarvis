@@ -205,3 +205,8 @@ nav { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; margin-bot
 /* station fills the screen: HUD on top, the command bar at the bottom */
 #station:not([hidden]) { display: flex; flex-direction: column; min-height: calc(100dvh - 120px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); }
 #station .askbar { margin-top: auto; }
+.tvpanel { margin-top: 12px; border: 1px solid var(--line); padding: 10px; }
+.tvpanel summary { cursor: pointer; color: var(--cyan2); font: 600 14px var(--hud); }
+.tvpanel input { min-width: 0; flex: 1; }
+.tvpanel button { flex-shrink: 0; padding: 10px; }
+#station .tvpanel .askbar { margin-top: 8px; }

@@ -50,7 +50,7 @@ def run_plan(router, plan):
                     'reason': str(exc)[:300], 'completed': done, 'undo_available': undo,
                     'hint': ('Отменить выполненное: rollback <id> для каждого id из undo_available'
                              if undo else 'Изменений не было')}
-        ok = result.get('status') in ('PASS', 'PLAN_ONLY', 'STARTED', 'CLOSED', 'ALREADY_CLOSED', 'HOST_ALLOWED_DEV')
+        ok = result.get('status') in ('PASS', 'PLAN_ONLY', 'STARTED', 'CLOSED', 'ALREADY_CLOSED', 'HOST_ALLOWED_DEV', 'REQUESTED')
         done.append({'step': i + 1, 'task': step['task'], 'status': result.get('status'), 'result': result})
         if result.get('audit_id') and (step['task'] in ('file-plan', 'office-plan') or step['task'].startswith('explorer-')):
             undo.append(result['audit_id'])
