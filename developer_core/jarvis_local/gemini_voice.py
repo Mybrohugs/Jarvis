@@ -142,16 +142,29 @@ def piper_local(text):
     import numpy as np
     parts, cur = [], ''
     for sentence in re.findall(r'[^.!?…]+[.!?…]*\s*', text) or [text]:
+        # Piper accepts at most 500 characters. Split oversized sentences instead
+        # of silently dropping their tail before synthesis.
+        while len(sentence) > 450:
+            if cur.strip():
+                parts.append(cur)
+                cur = ''
+            cut = sentence.rfind(' ', 0, 451)
+            if cut <= 0:
+                cut = 450
+            parts.append(sentence[:cut])
+            sentence = sentence[cut:]
         if cur and len(cur) + len(sentence) > 450:
             parts.append(cur)
             cur = ''
         cur += sentence
     if cur.strip():
         parts.append(cur)
+    if not parts:
+        raise Denied('Speech text must not be empty')
     gap = np.zeros(int(voice_dsp.RATE * 0.2))
     chunks = []
     for part in parts:
-        chunks += [_piper_once(part.strip()[:500]), gap]
+        chunks += [_piper_once(part.strip()), gap]
     return np.concatenate(chunks[:-1]), voice_dsp.RATE
 
 
