@@ -138,6 +138,10 @@ class PhoneQueue:
 def phone_quick_command(text):
     """Allowlisted quick media commands (user decision 27.10.2026). Returns {'task','args'} or None."""
     raw = text.strip()
+    from .tv_cast import video_command
+    url = video_command(raw)
+    if url:
+        return {'task': 'media-cast', 'args': {'url': url}}
     t = raw.lower().rstrip('.!?')
     num = re.search(r'(\d{1,3})', t)
     m = re.match(r'^(?:найди|поищи|где) (?:на (?:компьютере|пк|диске) )(.{2,100})$', t)
@@ -620,6 +624,20 @@ def build(workspace, token, port=0, allow_hosts=(), speech=fetch_speech, say_wai
                     return self.send(403, {'error': str(exc)[:200]})
             if not self.authed():
                 return
+            if self.path == '/api/tv/play':
+                # Explicit button press only: enqueue, never execute inside the gateway.
+                from .tv_cast import video_request
+                data = self.body()
+                if data is None:
+                    return
+                try:
+                    if set(data) != {'url'}:
+                        raise ValueError('Нужна только ссылка на видео')
+                    video_request(data['url'])
+                    item = queue.add('Видео на ТВ', auto={'task': 'media-cast', 'args': {'url': data['url']}})
+                    return self.send(202, {**item, 'speech': 'Запрос на видео в очереди JARVIS на ПК.'})
+                except ValueError as exc:
+                    return self.send(400, {'error': str(exc)})
             if self.path == '/api/listen':
                 return self.listen()
             if self.path == '/api/upload':
