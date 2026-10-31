@@ -131,7 +131,8 @@ async def _observe_playback(api, wait):
             return
         name = getattr(getattr(state, 'state', None), 'name', 'unknown').lower()
         observed.update(video_id=video, state=name)
-        ready.set()
+        if name not in ('starting', 'buffering', 'unknown'):
+            ready.set()
 
     listener = asyncio.create_task(api.subscribe(updated))
     completed = asyncio.create_task(ready.wait())

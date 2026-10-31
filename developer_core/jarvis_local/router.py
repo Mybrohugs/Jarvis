@@ -629,7 +629,7 @@ class UnifiedTaskRouter:
 
     def _tv_play(self, url):
         """Any web video -> the TV (Cast: YouTube app, or relayed through the PC); a TV in standby is
-        switched on first (never off). YouTube falls back to the paired YouTube link if Cast fails."""
+        switched on first (never off). Paired YouTube uses its existing native channel before Cast."""
         import urllib.parse
         from .tv_cast import parse_link
         from .tv_media import check_url
@@ -664,18 +664,12 @@ class UnifiedTaskRouter:
             except Exception:  # preserve Cast when HA is unavailable
                 pass
         try:
-            out = self.tv_media.play(url)
-        except Exception as exc:
-            try:
-                video, start = parse_link(url)
-            except Denied:
-                video = None
-            if not (video and self.tv_cast.store.configured()):
-                self.ws.journal.record('tv-play', 'FAILED', host=host, reason=str(exc)[:120], rollback=[])
-                if video:
-                    raise Denied('Не удалось передать видео через Cast. Нужна привязка YouTube: на ТВ откройте '
-                                 'YouTube → Настройки → Подключить по коду; затем «привяжи телевизор, код …»') from None
-                raise exc if isinstance(exc, Denied) else Denied('Телевизор не ответил: %s' % type(exc).__name__)
+            video, start = parse_link(url)
+        except Denied:
+            video = None
+        if video and self.tv_cast.store.configured():
+            # A Cast launch can replace the native app opened by HA. Preserve the
+            # already-paired native channel instead of launching another receiver.
             try:
                 if not self.tv_cast.play(video, start):
                     raise Denied('YouTube не подтвердил приём видео на телевизоре')
@@ -685,6 +679,15 @@ class UnifiedTaskRouter:
                     raise
                 raise Denied('Не удалось передать видео через привязку YouTube: ' + type(exc).__name__) from None
             out = {'kind': 'youtube-link', 'video': video}
+        else:
+            try:
+                out = self.tv_media.play(url)
+            except Exception as exc:
+                self.ws.journal.record('tv-play', 'FAILED', host=host, reason=type(exc).__name__, rollback=[])
+                if video:
+                    raise Denied('Не удалось передать видео через Cast. Нужна привязка YouTube: на ТВ откройте '
+                                 'YouTube → Настройки → Подключить по коду; затем «привяжи телевизор, код …»') from None
+                raise exc if isinstance(exc, Denied) else Denied('\u0422\u0435\u043b\u0435\u0432\u0438\u0437\u043e\u0440 \u043d\u0435 \u043e\u0442\u0432\u0435\u0442\u0438\u043b: %s' % type(exc).__name__)
         playback = {'confirmed': out['kind'] == 'relay'}
         if out['kind'] in ('youtube', 'youtube-link') and self.tv_cast.store.configured():
             try:
