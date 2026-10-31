@@ -134,9 +134,16 @@ class Doctor:
         missing = [title for title, _, speaker in self.r.ROUTINES.values()
                    if speaker and title.lower().replace('ё', 'е') not in have]
         detail = 'умный дом Яндекса: света и розеток %d, сценариев %d' % (n, len(info['scenarios']))
-        if missing:  # the lights still work; only the speaker part of these routines is missing
+        if missing and self.r.speaker() is None:  # the lights still work; only the speaker part is missing
             return 'WARN', detail + '; для колонки нет сценария: ' + ', '.join(missing), 'создайте в «Доме с Алисой»'
         return 'PASS', detail, None
+
+    def station(self):
+        from .station import keys as station_keys
+        if not hasattr(self.r, '_station') and not station_keys().configured():
+            return 'WARN', 'Яндекс Станция: нет токена Home Assistant', 'python -m developer_core.jarvis_local.station set-token --from-clipboard'
+        s = self.r.station.state()
+        return 'PASS', 'Яндекс Станция: %s, громкость %s' % (s['state'], s['volume']), None
 
     def speech_recognition(self):
         try:
@@ -190,6 +197,7 @@ class Doctor:
                   self._check('Диск', self.disk), self._check('Уведомления', self.push),
                   self._check('Поиск', self.search), self._check('Модели', self.local_models),
                   self._check('Ключи', self.cloud_keys), self._check('Умный дом', self.smart_home),
+                  self._check('Колонка', self.station),
                   self._check('Распознавание речи', self.speech_recognition),
                   self._check('Документы', self.office_tools), self._check('Веб-приложения', self.web_apps)]
         fails = [c for c in checks if c['status'] == 'FAIL']

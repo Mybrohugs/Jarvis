@@ -1,0 +1,40 @@
+--- a/main.py
++++ b/main.py
+@@ -1004,16 +1004,18 @@
+             return False
+     # JARVIS_P26_ROUTER_HOOK_END
+ 
+-    def _on_text_command(self, text: str):
++    def _on_text_command(self, text: str, *, source: str = "external"):
+         if not self._loop:
+             return
+-        # Respect wake-word sleep: a typed command must not be answered while
+-        # asleep either (the sleep gate is not just for the mic). Wake first with
+-        # "Hey Jarvis" or the WAKE NOW button.
+-        if self._wake_enabled and not self._awake:
+-            self.ui.write_log(
+-                "SYS: I'm asleep — say 'Hey Jarvis' or tap WAKE NOW first."
+-            )
++        # Explicit keyboard input wakes the assistant just like push-to-talk.
++        if not isinstance(text, str) or not text.strip():
++            return
++        text = text.strip()
++        if source == "ui":
++            self.wake(reason="typed command")
++            self._last_user_speech = time.monotonic()
++        elif self._wake_enabled and not self._awake:
++            self.ui.write_log("SYS: I'm asleep — local keyboard input or wake word required.")
+             return
+         # JARVIS_P26_UI_ROUTE
+         if self._p26_route_text(text, source="ui"):
+--- a/ui.py
++++ b/ui.py
+@@ -9641,7 +9641,7 @@
+         self._log.append_log(f"You: {txt}")
+         if self.on_text_command:
+             threading.Thread(
+-                target=self.on_text_command, args=(txt,), daemon=True
++                target=self.on_text_command, args=(txt,), kwargs={"source": "ui"}, daemon=True
+             ).start()
+ 
+     def _apply_state(self, state: str):
