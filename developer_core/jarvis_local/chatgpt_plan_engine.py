@@ -8,6 +8,7 @@ Windows-only credential protection via DPAPI. All AI tasks use plan-usage OAuth.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import base64
 import hashlib
 import json
@@ -38,6 +39,89 @@ SECRET_FILE = ROOT / "plan_oauth.dpapi"
 MAX_PROMPT = 12000
 
 
+ERRORS = {
+    "auth_required": ("На ПК требуется повторный вход ChatGPT. Ключ API на телефоне не нужен.", True, False, 503),
+    "network": ("Нет связи ПК с ChatGPT. Проверьте интернет на ПК.", False, True, 503),
+    "rate_limited": ("Достигнут лимит ChatGPT. Повторите позже.", False, True, 429),
+    "access_denied": ("Доступ к ChatGPT ограничен настройками аккаунта или приложения. Повторный вход не требуется.", False, False, 403),
+    "configuration": ("Нужно исправить настройки подключения ChatGPT на ПК. Повторный вход не требуется.", False, False, 503),
+    "service_unavailable": ("Сервис ChatGPT временно недоступен. Повторите позже.", False, True, 503),
+    "session_unavailable": ("Сеанс ChatGPT временно не подтверждён. Повторите позже; повторный вход пока не требуется.", False, True, 503),
+    "invalid_response": ("ChatGPT вернул некорректный ответ. Повторите позже.", False, True, 502),
+    "incomplete_response": ("Ответ ChatGPT прервался. Повторите запрос после восстановления связи.", False, True, 502),
+    "storage": ("Не удалось прочитать или сохранить защищённый сеанс ChatGPT на ПК. Повторный вход пока не требуется.", False, False, 503),
+    "busy": ("ChatGPT занят обновлением сеанса или предыдущим запросом. Повторите через несколько секунд.", False, True, 503),
+    "unknown": ("ChatGPT временно недоступен. Повторите позже.", False, True, 503),
+}
+AUTH_CODES = frozenset(("invalid_grant", "invalid_refresh_token", "token_expired", "refresh_token_expired",
+                        "refresh_token_invalidated", "refresh_token_reused", "session_revoked", "token_revoked"))
+CONFIG_CODES = frozenset(("invalid_client", "subscription_sharing_unsupported_capability", "subscription_sharing_route_not_supported",
+                          "chatpass_v2_scope_not_authorized", "chatpass_v2_invalid_authorization_context"))
+
+class ChatGPTError(RuntimeError):
+    """Only allowlisted messages/metadata may cross the desktop or phone boundary."""
+    def __init__(self, kind="unknown", retry_after=None):
+        self.kind = kind if kind in ERRORS else "unknown"
+        message, self.needs_auth, self.retryable, self.http_status = ERRORS[self.kind]
+        self.retry_after = min(300, max(1, int(retry_after))) if isinstance(retry_after, (int, float)) else None
+        super().__init__(message)
+
+    def public(self):
+        result = {"error": str(self), "code": self.kind, "needs_auth": self.needs_auth, "retryable": self.retryable}
+        if self.retry_after is not None:
+            result["retry_after"] = self.retry_after
+        return result
+
+def classify_error(exc):
+    # The same source can be loaded by desktop and phone under different module names.
+    kind = getattr(exc, "kind", None)
+    if isinstance(kind, str) and kind in ERRORS:
+        return ChatGPTError(kind, getattr(exc, "retry_after", None))
+    if isinstance(exc, urllib.error.HTTPError):
+        return http_error(exc)
+    if isinstance(exc, (OSError, TimeoutError)):
+        return ChatGPTError("network")
+    return ChatGPTError("unknown")
+
+def response_error(error, status=0, retry_after=None):
+    code = error.get("code") if isinstance(error, dict) else error if isinstance(error, str) else ""
+    if not isinstance(code, str):
+        code = ""
+    if code in AUTH_CODES:
+        return ChatGPTError("auth_required")
+    if code in CONFIG_CODES:
+        return ChatGPTError("configuration")
+    if code == "subscription_sharing_user_not_eligible":
+        return ChatGPTError("access_denied")
+    if code == "subscription_sharing_usage_limit_exceeded" or status == 429:
+        return ChatGPTError("rate_limited", retry_after)
+    if code in ("subscription_sharing_usage_unavailable", "subscription_sharing_user_unavailable") or status >= 500:
+        return ChatGPTError("service_unavailable", retry_after)
+    if status == 403:
+        return ChatGPTError("access_denied")
+    if code == "subscription_sharing_invalid_user" or status == 401:
+        return ChatGPTError("session_unavailable")
+    return ChatGPTError("configuration" if 400 <= status < 500 else "unknown")
+
+def http_error(exc):
+    # Parse codes, never forward the provider's raw message, URL, token or body.
+    error = {}
+    try:
+        raw = exc.read(65537)
+        if len(raw) <= 65536:
+            value = json.loads(raw)
+            if isinstance(value, dict):
+                error = value.get("error", {})
+    except (ValueError, OSError, TypeError):
+        pass
+    finally:
+        exc.close()
+    try:
+        retry_after = int(exc.headers.get("Retry-After", ""))
+    except (ValueError, TypeError, AttributeError):
+        retry_after = None
+    return response_error(error, exc.code, retry_after)
+
 def _json_request(url: str, method: str = "GET", body: dict | None = None,
                   bearer: str | None = None, timeout: int = 30) -> dict:
     headers = {"Accept": "application/json", "User-Agent": "JARVIS-Local-Bridge/1.0"}
@@ -50,10 +134,19 @@ def _json_request(url: str, method: str = "GET", body: dict | None = None,
     req = urllib.request.Request(url, method=method, data=data, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as response:
-            return json.loads(response.read(1024 * 1024).decode("utf-8"))
+            raw = response.read(1024 * 1024 + 1)
+            if len(raw) > 1024 * 1024:
+                raise ChatGPTError("invalid_response")
+            result = json.loads(raw.decode("utf-8"))
+            if not isinstance(result, dict):
+                raise ChatGPTError("invalid_response")
+            return result
     except urllib.error.HTTPError as exc:
-        # Avoid output of request headers/credentials/authorization callbacks.
-        raise RuntimeError(f"HTTP {exc.code} ({urllib.parse.urlsplit(url).hostname})") from None
+        raise http_error(exc) from None
+    except (ValueError, UnicodeError):
+        raise ChatGPTError("invalid_response") from None
+    except OSError:
+        raise ChatGPTError("network") from None
 
 
 def _b64url_decode(value: str) -> bytes:
@@ -155,9 +248,10 @@ def _save_credential(obj: dict):
 
 def connect(timeout_sec: int = 240) -> str:
     """Only user-initiated authorization. No automatic UI/cookie scraping."""
-    old = _load_credential()
+    with _credential_lock():
+        old = _read_session()
+        host_id = _load_host()
     issued = old.get("client_id") if old else None
-    host_id = _load_host()
     pending_state = secrets.token_urlsafe(32)
     pending_nonce = secrets.token_urlsafe(32)
     verifier = secrets.token_urlsafe(64)
@@ -257,36 +351,144 @@ def connect(timeout_sec: int = 240) -> str:
         "expires_at": time.time() + int(tokens.get("expires_in") or 3600),
         "earliest_refresh_at": tokens.get("earliest_refresh_at"),
     }
-    _save_credential(account)
+    with _credential_lock():
+        _write_session(account)
     return "Подключение ChatGPT plan usage сохранено для текущего пользователя Windows."
 
 
 _refresh_lock = threading.Lock()
 
-def _token() -> str:
-    with _refresh_lock:
+@contextmanager
+def _credential_lock(timeout=20.0):
+    """One OS lock per credential file, shared by ALL desktop/gateway processes.
+
+    The empty lock file is permanent: unlinking it could create two independent locks.
+    Windows releases its byte-range lock automatically if the owning process exits.
+    """
+    deadline = time.monotonic() + timeout
+    if not _refresh_lock.acquire(timeout=max(0, timeout)):
+        raise ChatGPTError("busy", 2)
+    stream = None
+    acquired = False
+    try:
+        lock_path = SECRET_FILE.with_name(SECRET_FILE.name + ".lock")
+        try:
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            stream = open(lock_path, "a+b")
+            stream.seek(0, 2)
+            if stream.tell() == 0:
+                stream.write(b"\0"); stream.flush()
+        except OSError:
+            raise ChatGPTError("storage") from None
+        while True:
+            try:
+                stream.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+                    msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise ChatGPTError("busy", 2) from None
+                time.sleep(min(.05, max(0, deadline - time.monotonic())))
+        yield
+    finally:
+        try:
+            if acquired:
+                try:
+                    stream.seek(0)
+                    if os.name == "nt":
+                        import msvcrt
+                        msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+                    else:
+                        import fcntl
+                        fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+                finally:
+                    stream.close()
+            elif stream is not None:
+                stream.close()
+        finally:
+            _refresh_lock.release()
+
+
+def _read_session():
+    try:
         account = _load_credential()
-        if account is None:
-            raise RuntimeError("ChatGPT пока не подключён: выполните --connect один раз")
-        if time.time() + 180 < float(account.get("expires_at", 0)):
-            return account["access_token"]
-        if not account.get("refresh_token"):
-            raise RuntimeError("Сеанс истёк. Требуется повторный --connect")
-        tokens = _json_request(TOKEN_URL, method="POST", body={
-            "grant_type": "refresh_token",
-            "client_id": account["client_id"],
-            "refresh_token": account["refresh_token"],
-            "resource": RESOURCE,
-        })
-        if not tokens.get("refresh_token") or not tokens.get("access_token"):
-            raise RuntimeError("Не удалось обновить сеанс без повторной авторизации")
-        account.update({
-            "refresh_token": tokens["refresh_token"],
-            "access_token": tokens["access_token"],
-            "expires_at": time.time() + int(tokens.get("expires_in") or 3600),
-            "scope": tokens.get("scope") or account["scope"],
-        })
+        if account is not None and not isinstance(account, dict):
+            raise ValueError()
+        return account
+    except Exception:
+        raise ChatGPTError("storage") from None
+
+def _write_session(account):
+    try:
         _save_credential(account)
+    except Exception:
+        raise ChatGPTError("storage") from None
+
+def _token(*, force_refresh=False) -> str:
+    with _credential_lock():
+        # Reload AFTER taking the OS lock: another process may have rotated the token.
+        account = _read_session()
+        if account is None:
+            raise ChatGPTError("auth_required")
+        try:
+            expires = float(account.get("expires_at", 0))
+            retry_at = float(account.get("refresh_retry_at", 0))
+        except (TypeError, ValueError):
+            raise ChatGPTError("storage") from None
+        access = account.get("access_token")
+        access = access if isinstance(access, str) and access else None
+        now = time.time()
+        if access and now + 180 < expires and not force_refresh:
+            return access
+        if retry_at > now:
+            if access and expires > now + 5:
+                return access
+            raise ChatGPTError(account.get("refresh_error_kind", "service_unavailable"), retry_at - now)
+        if not account.get("refresh_token"):
+            if access and expires > now + 5:
+                return access
+            raise ChatGPTError("auth_required")
+        if not account.get("client_id"):
+            raise ChatGPTError("configuration")
+        try:
+            tokens = _json_request(TOKEN_URL, method="POST", body={
+                "grant_type": "refresh_token", "client_id": account["client_id"],
+                "refresh_token": account["refresh_token"], "resource": RESOURCE,
+            }, timeout=10)
+        except Exception as exc:
+            error = classify_error(exc)
+            if error.needs_auth:
+                # Keep the issued client/host mapping for reauthorization, but never reuse invalid tokens.
+                for key in ("access_token", "refresh_token", "id_token", "expires_at", "refresh_retry_at", "refresh_error_kind"):
+                    account.pop(key, None)
+                _write_session(account)
+            elif error.retryable:
+                account["refresh_retry_at"] = time.time() + min(60, error.retry_after or 10)
+                account["refresh_error_kind"] = error.kind
+                _write_session(account)
+                if access and expires > time.time() + 5:
+                    return access  # a transient refresh failure must not discard a still-valid access token
+            raise error from None
+        if not isinstance(tokens.get("refresh_token"), str) or not tokens["refresh_token"] or not isinstance(tokens.get("access_token"), str) or not tokens["access_token"]:
+            raise ChatGPTError("invalid_response")
+        try:
+            lifetime = int(tokens.get("expires_in") or 3600)
+            if not 0 < lifetime <= 86400:
+                raise ValueError()
+        except (ValueError, TypeError):
+            raise ChatGPTError("invalid_response") from None
+        account.update({"refresh_token": tokens["refresh_token"], "access_token": tokens["access_token"],
+                        "expires_at": time.time() + lifetime, "scope": tokens.get("scope") or account.get("scope", "")})
+        if tokens.get("id_token"):
+            account["id_token"] = tokens["id_token"]
+        account.pop("refresh_retry_at", None); account.pop("refresh_error_kind", None)
+        _write_session(account)
         return account["access_token"]
 
 
@@ -295,7 +497,7 @@ def _model(token: str) -> str:
     choices = [m.get("slug") for m in catalog.get("models", [])
                if m.get("visibility") == "list" and isinstance(m.get("slug"), str)]
     if not choices:
-        raise RuntimeError("Нет моделей ChatGPT plan usage, доступных этому аккаунту")
+        raise ChatGPTError("access_denied")
     return choices[0]  # API ordering; no invented model identifier.
 
 
@@ -334,19 +536,20 @@ def _response(prompt: str, token: str, model: str) -> str:
                     total_len += len(d)
                     if total_len > 24000:
                         raise RuntimeError("Ответ слишком длинный для голосового интерфейса")
-                elif kind == "response.failed":
-                    err = (evt.get("response") or {}).get("error") or {}
-                    raise RuntimeError("Ответ OpenAI завершился ошибкой: " + str(err.get("code") or "unknown"))
+                elif kind in ("response.failed", "error"):
+                    err = (evt.get("response") or {}).get("error") or evt.get("error") or evt
+                    raise response_error(err)
+                elif kind == "response.incomplete":
+                    raise ChatGPTError("incomplete_response")
                 elif kind == "response.completed":
                     completed = True
     except urllib.error.HTTPError as exc:
-        if exc.code == 429:
-            raise RuntimeError("Достигнут лимит ChatGPT plan usage; переход к Gemini") from None
-        if exc.code in (401, 403):
-            raise RuntimeError("Доступ ChatGPT не подтверждён; переход к Gemini") from None
-        raise RuntimeError(f"Ошибка сервиса OpenAI HTTP {exc.code}; переход к Gemini") from None
+        raise http_error(exc) from None
+    except OSError:
+        raise ChatGPTError("network") from None
+
     if not completed:
-        raise RuntimeError("GPT завершил поток без подтверждения результата")
+        raise ChatGPTError("incomplete_response")
     return "".join(pieces).strip() or "GPT не вернул текстовый ответ"
 
 
@@ -365,16 +568,27 @@ def dispatch(params: dict) -> str:
         answer = _response(prompt, token, selected)
         return "[ОТВЕТ GPT через официальное использование подписки ChatGPT] " + answer
     except Exception as exc:
-        # No paid API fallback. JARVIS Gemini Live can answer instead.
-        return f"[GPT НЕДОСТУПЕН: {type(exc).__name__}: {str(exc)[:180]}] Продолжи ответ через Gemini, если это возможно, и не утверждай, что ответ получен от GPT."
+        error = classify_error(exc)
+        if error.kind == "session_unavailable":
+            try:
+                _token(force_refresh=True)  # confirm/recover auth without replaying inference
+            except Exception as refresh_error:
+                error = classify_error(refresh_error)
+        return "[GPT НЕДОСТУПЕН: " + str(error) + "]"
 
 
 def status() -> str:
-    data = _load_credential()
-    if not data:
-        return "ChatGPT не подключён. Один раз выполните --connect. Gemini продолжает работать."
-    # Do not display the email or any token in plugin output.
-    return "ChatGPT подключён через официальный Sign in with ChatGPT. Токены хранятся локально с DPAPI. GPT доступен для поддерживаемых текстовых задач, не для Realtime-аудио."
+    try:
+        selected = _model(_token())
+        return "ChatGPT подключён. Модель: " + selected + ". Токены защищены Windows DPAPI."
+    except Exception as exc:
+        error = classify_error(exc)
+        if error.kind == "session_unavailable":
+            try:
+                _token(force_refresh=True)
+            except Exception as refresh_error:
+                error = classify_error(refresh_error)
+        return str(error)
 
 
 def main():
@@ -396,8 +610,9 @@ def main():
             sys.exit(2)
     else:
         # Stop use immediately and delete local tokens; remote revoke should be done in ChatGPT Settings.
-        if SECRET_FILE.exists():
-            SECRET_FILE.unlink()
+        with _credential_lock():
+            if SECRET_FILE.exists():
+                SECRET_FILE.unlink()
         print("Локальный сеанс отключён. Для полного отзыва разрешения используйте ChatGPT Settings.")
 
 

@@ -8,6 +8,8 @@ import unittest
 from unittest.mock import Mock
 from developer_core.jarvis_local.pwa_gateway import build
 from developer_core.jarvis_local.tv_phone_dev import build_preview
+from developer_core.jarvis_local.phone_chatgpt import ChatGPT
+from developer_core.jarvis_local.chatgpt_plan_engine import ChatGPTError
 from developer_core.jarvis_local.phone_executor import PhoneExecutor
 from developer_core.jarvis_local.router import UnifiedTaskRouter
 from developer_core.jarvis_local.session import TrustedLocalSession, Denied
@@ -21,7 +23,8 @@ class PhoneDevTests(unittest.TestCase):
         self.workspace=root/'workspace';self.workspace.mkdir()
         self.gateway=build(self.workspace,'',0,say_wait=0)
         self.host='pc.test.ts.net:8443';self.origin='https://'+self.host
-        self.preview=build_preview(self.mobile,self.gateway,port=0,public_host=self.host)
+        self.chat=ChatGPT();self.chat.bridge=Mock()
+        self.preview=build_preview(self.mobile,self.gateway,port=0,public_host=self.host,chat=self.chat)
         for server in (self.gateway,self.preview):
             thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
             self.addCleanup(server.server_close);self.addCleanup(server.shutdown)
@@ -75,3 +78,17 @@ class PhoneDevTests(unittest.TestCase):
         self.assertEqual(self.request('POST','/api/chatgpt/turn',{'input':[]},token)[0],400)
         self.assertEqual(self.request('POST','/api/chatgpt/connect',{},token)[0],404)
         self.assertEqual(self.request('POST','/api/say',{'text':'открой блокнот'},token)[0],400)
+
+    def test_typed_chat_failures_keep_device_paired_and_do_not_leak(self):
+        status,raw=self.request('POST','/api/pair',{'code':self.gateway.pairing.code,'name':'chat recovery'})
+        token=json.loads(raw)['token']
+        for kind,expected in (('network',503),('rate_limited',429),('auth_required',503),('access_denied',403)):
+            with self.subTest(kind=kind):
+                self.chat.bridge._token.side_effect=ChatGPTError(kind)
+                status,body=self.request('POST','/api/chatgpt/turn',{'input':[{'role':'user','content':'hi'}]},token)
+                data=json.loads(body);self.assertEqual(status,expected);self.assertEqual(data['code'],kind)
+                self.assertEqual(data['needs_auth'],kind=='auth_required')
+                self.assertEqual(self.request('GET','/api/summary',token=token)[0],200)
+        self.chat.turn=Mock(side_effect=RuntimeError('private-token-do-not-leak'))
+        status,body=self.request('POST','/api/chatgpt/turn',{'input':[{'role':'user','content':'hi'}]},token)
+        self.assertEqual(status,503);self.assertNotIn(b'private-token',body);self.assertFalse(json.loads(body)['needs_auth'])
