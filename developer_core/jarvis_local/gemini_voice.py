@@ -29,7 +29,7 @@ from . import voice_dsp
 from .qwen_bank import bank_key
 from .session import Denied
 
-DEV_ROOT = Path(__file__).resolve().parents[2]
+DEV_ROOT = Path(os.environ.get('JARVIS_DEV_STATE_DIR') or Path(__file__).resolve().parents[2])
 ROOT = DEV_ROOT / '.gemini-dev'
 HOST = 'generativelanguage.googleapis.com'
 MODEL = 'gemini-3.8-flash-tts'
