@@ -99,7 +99,9 @@ def build_preview(mobile, gateway, *, port=10797, public_host, diagnostics=None,
             except (ValueError, TypeError):
                 return self.send(400, {'error':'Некорректный или слишком длинный запрос чата.'})
             except RuntimeError as exc:
-                return self.send(503, {'error':str(exc)})
+                from .chatgpt_plan_engine import classify_error
+                error = classify_error(exc)
+                return self.send(error.http_status, error.public())
             except Exception:
                 return self.send(503, {'error':'ChatGPT временно недоступен.'})
 

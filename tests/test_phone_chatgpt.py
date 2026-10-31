@@ -3,6 +3,7 @@ import json
 import unittest
 from unittest.mock import Mock, patch
 from developer_core.jarvis_local.phone_chatgpt import ChatGPT, read_stream, AUTH_ERROR
+from developer_core.jarvis_local.chatgpt_plan_engine import ChatGPTError
 
 class ChatGPTTests(unittest.TestCase):
     def test_terminal_event_and_function_history(self):
@@ -32,7 +33,7 @@ class ChatGPTTests(unittest.TestCase):
         client.bridge._token.assert_not_called()
 
     def test_auth_failure_safe_and_no_token_leak(self):
-        client=ChatGPT();client.bridge=Mock();client.bridge._token.side_effect=RuntimeError('private-secret')
+        client=ChatGPT();client.bridge=Mock();client.bridge._token.side_effect=ChatGPTError('auth_required')
         self.assertEqual(client.status()['error'],AUTH_ERROR)
         with self.assertRaisesRegex(RuntimeError,'повторный вход'):client.turn({'input':[{'role':'user','content':'hi'}]})
         self.assertNotIn('private-secret',str(client.status()))
@@ -47,3 +48,36 @@ class ChatGPTTests(unittest.TestCase):
         raw=''.join('data: '+json.dumps(event)+'\n' for event in events).encode()
         self.assertEqual(read_stream(io.BytesIO(raw)),{'text':'OK','output':[output]})
         with self.assertRaises(RuntimeError):read_stream(io.BytesIO(b'data: {"type":"response.completed","response":{"output":[]}}\n'))
+
+    def test_network_limit_and_unknown_never_ask_for_login(self):
+        for exception,kind in ((OSError('private-token'),'network'),(ChatGPTError('rate_limited'),'rate_limited'),(RuntimeError('private-token'),'unknown')):
+            client=ChatGPT();client.bridge=Mock();client.bridge._token.side_effect=exception
+            status=client.status();self.assertEqual(status['code'],kind);self.assertFalse(status['needs_auth'])
+            self.assertNotIn('private-token',json.dumps(status))
+            with self.assertRaises(ChatGPTError) as error:client.turn({'input':[{'role':'user','content':'hi'}]})
+            self.assertEqual(error.exception.kind,kind);self.assertFalse(error.exception.needs_auth)
+
+    def test_in_stream_rate_limit_retains_specific_safe_error(self):
+        event={'type':'response.failed','response':{'error':{'code':'subscription_sharing_usage_limit_exceeded','message':'private-token'}}}
+        with self.assertRaises(ChatGPTError) as error:read_stream(io.BytesIO(('data: '+json.dumps(event)+'\n').encode()))
+        self.assertEqual(error.exception.kind,'rate_limited');self.assertNotIn('private-token',str(error.exception))
+
+    def test_stale_401_confirms_refresh_without_replaying_inference(self):
+        import urllib.error
+        client=ChatGPT();client.bridge=Mock();client.bridge._token.return_value='fake';client.bridge._model.return_value='account-model'
+        response=urllib.error.HTTPError('https://api.openai.com/v1/responses',401,'bad',{},io.BytesIO(b'{"error":{"code":"subscription_sharing_invalid_user"}}'))
+        with patch('urllib.request.urlopen',side_effect=response) as request:
+            with self.assertRaises(ChatGPTError) as error:client.turn({'input':[{'role':'user','content':'hi'}]})
+        self.assertEqual(error.exception.kind,'session_unavailable');self.assertFalse(error.exception.needs_auth)
+        client.bridge._token.assert_any_call(force_refresh=True);self.assertEqual(request.call_count,1)
+
+    def test_auth_is_requested_only_after_confirmed_terminal_refresh(self):
+        client=ChatGPT();client.bridge=Mock();client.bridge._model.side_effect=ChatGPTError('session_unavailable')
+        client.bridge._token.side_effect=['fake',ChatGPTError('auth_required')]
+        status=client.status();self.assertEqual(status['code'],'auth_required');self.assertTrue(status['needs_auth'])
+
+    def test_network_recovery_after_status_cache_expiry(self):
+        client=ChatGPT();client.bridge=Mock();client.bridge._token.side_effect=[OSError('offline'),'fake'];client.bridge._model.return_value='model'
+        with patch('developer_core.jarvis_local.phone_chatgpt.time.monotonic',side_effect=[100,100,121,121]):
+            first=client.status();second=client.status()
+        self.assertEqual(first['code'],'network');self.assertFalse(first['needs_auth']);self.assertTrue(second['connected'])
