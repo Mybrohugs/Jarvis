@@ -7,7 +7,7 @@ import re
 import secrets
 import shutil
 
-VERSION = '1.4.2'
+VERSION = '1.4.3'
 EXE = 'JARVIS-DEV.exe'
 MANIFEST = 'package-manifest.json'
 

@@ -51,3 +51,27 @@ class PlaybackObservationTests(unittest.IsolatedAsyncioTestCase):
                 raise OSError('offline')
         with self.assertRaises(OSError):
             await _observe_playback(Broken(), .1)
+
+    async def test_starting_event_waits_for_playing_instead_of_finishing_early(self):
+        import asyncio
+        from types import SimpleNamespace as NS
+        from developer_core.jarvis_local.tv_cast import _observe_playback
+        class Api:
+            async def subscribe(self, callback):
+                await callback(NS(videoId='5-wdT_xbVDQ', state=NS(name='Starting')))
+                await asyncio.sleep(.02)
+                await callback(NS(videoId='5-wdT_xbVDQ', state=NS(name='Playing')))
+                await asyncio.Event().wait()
+        result = await _observe_playback(Api(), .2)
+        self.assertEqual(result['state'], 'playing')
+
+    async def test_starting_timeout_never_becomes_playing(self):
+        import asyncio
+        from types import SimpleNamespace as NS
+        from developer_core.jarvis_local.tv_cast import _observe_playback
+        class Api:
+            async def subscribe(self, callback):
+                await callback(NS(videoId='5-wdT_xbVDQ', state=NS(name='Starting')))
+                await asyncio.Event().wait()
+        result = await _observe_playback(Api(), .02)
+        self.assertEqual(result, {'video_id': '5-wdT_xbVDQ', 'state': 'starting'})

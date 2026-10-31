@@ -72,7 +72,7 @@ def main():
     if ffmpeg_info.returncode or '--enable-nonfree' in ffmpeg_info.stdout:raise RuntimeError('FFmpeg build is not suitable for this package')
     (licenses/'FFmpeg-build.txt').write_text(ffmpeg_info.stdout,encoding='utf-8')
     (bundle/'THIRD_PARTY.md').write_text('This bundle includes Python, Playwright/Chromium, FFmpeg and Python dependencies. Their license files are in licenses/ and browser directories. FFmpeg source/build: https://www.gyan.dev/ffmpeg/builds/ ; Playwright: https://github.com/microsoft/playwright ; Python: https://www.python.org/ . No account secrets or local models are redistributed.\n',encoding='utf-8')
-    (bundle/'README_RU.md').write_text("""# JARVIS DEV Station 1.4.2
+    (bundle/'README_RU.md').write_text("""# JARVIS DEV Station 1.4.3
 
 Распакуйте весь каталог. Run-DEV.cmd запускает автономный ChatGPT-режим ПК и отправку видео. Python устанавливать не нужно. Install-DEV.cmd помещает проверенную версию в отдельный каталог текущего пользователя; старые версии и данные не удаляются. Doctor-DEV.cmd проверяет зависимости. Rollback-DEV.cmd переключает предыдущую установленную версию, если она есть.
 

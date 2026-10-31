@@ -1,4 +1,4 @@
-"""A video link to the TV: link parsing, Cast, the PC relay, the YouTube-link fallback, power-on,
+"""A video link to the TV: link parsing, Cast, the PC relay, the paired YouTube channel priority, power-on,
 the phone allowlist; fakes only (no TV, no network)."""
 import tempfile
 import unittest
@@ -192,13 +192,34 @@ class RouterTvTests(unittest.TestCase):
                 self.run_phrase('на телевизор ' + bad)
         self.assertEqual(self.log, [])
 
-    def test_youtube_falls_back_to_the_paired_link_when_cast_fails(self):
+    def test_unpaired_youtube_uses_cast_and_paired_uses_existing_link(self):
         self.cast.youtube_ok = False
         with self.assertRaises(Denied):  # not paired: a clear refusal
             self.run_phrase('на телевизор https://youtu.be/%s' % VID)
         self.router._tv_cast.store.data = {'screenId': 's1'}
         self.assertEqual(self.run_phrase('на телевизор https://youtu.be/%s' % VID)['status'], 'PASS')
         self.assertIn(('play', VID), self.log)
+
+    def test_paired_youtube_does_not_launch_a_cast_receiver(self):
+        from unittest.mock import Mock
+        self.router._tv_cast.store.data = {'screenId': 's1'}
+        self.router._tv_cast.play = Mock(return_value=True)
+        self.router._tv_cast.status = Mock(return_value={'video_id': VID, 'state': 'playing'})
+        self.router._tv_media.play = Mock(side_effect=AssertionError('must preserve native app'))
+        result = self.router.dispatch('tv-play', url='https://youtu.be/%s?t=42' % VID)
+        self.assertTrue(result['playback']['confirmed'])
+        self.router._tv_cast.play.assert_called_once_with(VID, 42)
+        self.router._tv_media.play.assert_not_called()
+
+    def test_failed_paired_channel_never_launches_a_different_receiver(self):
+        from unittest.mock import Mock
+        self.router._tv_cast.store.data = {'screenId': 's1'}
+        self.router._tv_cast.play = Mock(side_effect=RuntimeError('secret-provider-body'))
+        self.router._tv_media.play = Mock()
+        with self.assertRaises(Denied) as error:
+            self.router.dispatch('tv-play', url='https://youtu.be/%s' % VID)
+        self.assertNotIn('secret-provider-body', str(error.exception))
+        self.router._tv_media.play.assert_not_called()
 
     def test_phone_queue_runs_it_end_to_end(self):
         ex = PhoneExecutor(self.dir, router=self.router, chat=lambda m: '{"intent": "unknown"}')
