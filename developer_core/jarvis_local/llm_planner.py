@@ -141,6 +141,8 @@ def llm_plan(phrase, chat=_ollama):
         validate_plan(plan)
     except ValueError as exc:
         return {'intent': 'refused', 'steps': [], 'source': 'llm', 'reason': 'Недопустимый план: ' + str(exc)}
+    if any(s['task'].startswith('skill-') for s in plan['steps']):  # only the owner's own words teach skills
+        return {'intent': 'refused', 'steps': [], 'source': 'llm', 'reason': 'Навыки учатся только по правилам'}
     bad = provenance_ok(plan, phrase)
     if bad:
         return {'intent': 'refused', 'steps': [], 'source': 'llm',
@@ -151,8 +153,32 @@ def llm_plan(phrase, chat=_ollama):
     return plan
 
 
-def understand_smart(phrase, chat=_ollama):
-    """Rules first (fast, exact); LLM only for phrases the rules do not understand. Refusals stay refusals."""
+CORRECTION = re.compile(
+    r'^(?:(?:джарвис|jarvis)[,\s]+)?(?:(?:нет|не то|неправильно|не так)[,.!\s]+(?:я\s+)?'
+    r'(?:имел|имела|хотел|хотела|просил|просила)(?:\s+в\s+виду|\s+сказать)?|я\s+(?:имел|имела)\s+в\s+виду)'
+    r'[,:\s]+(.{2,300}?)[.!]?$', re.I | re.S)
+
+
+def understand_smart(phrase, chat=_ollama, skills=None):
+    """Learned skills first (the owner's own names), then rules (fast, exact); LLM only for phrases
+    the rules do not understand. Refusals stay refusals.
+    "нет, я имел в виду X" plans X and marks it so that, once X has run, the previous phrase is
+    learned as X (Skills.done)."""
+    m = CORRECTION.match((phrase or '').strip())
+    if m:
+        before = skills.recent() if skills is not None else None
+        plan = understand_smart(m.group(1), chat, skills)
+        if plan['intent'] == 'plan' and before and not any(s['task'].startswith('skill-') for s in plan['steps']):
+            plan['learn'] = before
+        return plan
+    if skills is not None:
+        try:
+            skills.heard(phrase)
+        except OSError:
+            pass
+    hit = skills.match(phrase) if skills is not None else None
+    if hit:
+        return hit
     plan = understand(phrase)
     if plan['intent'] in ('plan', 'refused'):
         plan.setdefault('source', 'rules')

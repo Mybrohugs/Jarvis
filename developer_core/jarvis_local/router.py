@@ -4,6 +4,7 @@ Each task declares its privilege. Nothing here is registered in Workbench, MCP, 
 or mobile dispatch; status() checks that by reading those sources.
 """
 from __future__ import annotations
+import time
 from pathlib import Path
 from .browser import BrowserAgent
 from .home_media import MediaOperator
@@ -42,6 +43,13 @@ TASKS = {
     'music': 'write', 'music-status': 'read',  # any PC player via Windows media controls
     'home-devices': 'read', 'home-switch': 'write', 'home-brightness': 'write', 'home-scenario': 'write',  # Yandex
     'home-routine': 'write',  # fixed routines: lights/sockets via Yandex, TV off, speaker via a Yandex scenario
+    # Yandex Station through the owner's Home Assistant: its voice, Alice commands, volume, playback
+    'station-status': 'read', 'station-say': 'write', 'station-command': 'write', 'station-volume': 'write',
+    'station-control': 'write',
+    'phone-status': 'read',  # the owner's iPhone as Home Assistant sees it: home or not, battery, Focus
+    # learned skills: a named phrase -> a stored plan; each step still runs with its own approval
+    'skill-teach': 'write', 'skill-save': 'write', 'skill-list': 'read', 'skill-forget': 'write',
+    'skill-unlearn': 'write', 'tv-play': 'write', 'tv-link': 'write',
     'screen-describe': 'write',  # local vision model reads the screen; approval like other pc-* tasks
     'web-answer': 'write',  # the question leaves the PC (own SearXNG -> search engines); answer is text only
     'app-open': 'write', 'file-open': 'write', 'desktop-show': 'write', 'windows-list': 'read',  # allowlisted apps
@@ -515,6 +523,259 @@ class UnifiedTaskRouter:
             self._yandex = YandexHome()
         return self._yandex
 
+    @property
+    def station(self):
+        if not hasattr(self, '_station'):
+            from .station import Station
+            self._station = Station()
+        return self._station
+
+    def speaker(self):
+        """The station when its HA token is set (tests inject _station, None = no speaker), else None."""
+        if not hasattr(self, '_station'):
+            from .station import keys as station_keys
+            if not station_keys().configured():
+                return None
+        return self.station
+
+    def at_home(self):
+        """Owner's presence as the last routine left it: after 'Я ушёл' the speaker stays quiet."""
+        import json
+        try:
+            return json.loads((self.ws.state / 'presence.json').read_text(encoding='utf-8')).get('home', True)
+        except (OSError, ValueError):
+            return True
+
+    def set_presence(self, home):
+        import json
+        (self.ws.state / 'presence.json').write_text(json.dumps({'home': bool(home)}), encoding='utf-8')
+
+    def quiet(self):
+        """Sleep / night Focus on the owner's iPhone (phone_watch): reminders are pushed, nobody speaks."""
+        import json, time
+        try:
+            s = json.loads((self.ws.state / 'phone_watch.json').read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            return False
+        return bool(s.get('quiet')) and time.time() - s.get('seen', 0) < 600
+
+    def _phone_status(self):
+        from .phone_watch import status
+        return status(self)
+
+    @property
+    def skills(self):
+        from .skills import Skills
+        return getattr(self, '_skills', None) or Skills(self.ws.state)  # tests inject one with a clock
+
+    def _skill_store(self, task, name, steps, phrase):
+        from .intent import describe
+        summary = describe(steps)
+        self.session.confirm({'task': task, 'name': name[:40], 'steps': summary[:300]})
+        item = self.skills.teach(name, steps, phrase)
+        self.ws.journal.record(task, 'PASS', skill=item['name'], tasks=[s['task'] for s in item['steps']], rollback=[])
+        return {'status': 'PASS', 'skill': item,
+                'speech': 'Запомнил навык «%s»: %s. Скажите «%s», и я это сделаю.' % (item['name'], summary, item['name'])}
+
+    def _skill_teach(self, name, phrase):
+        planner = getattr(self, 'planner', None)
+        if planner is None:
+            from .llm_planner import understand_smart as planner  # rules, then the local LLM; never other skills
+        plan = planner(phrase)
+        if plan['intent'] != 'plan':
+            raise Denied('Не понял, что делать по «%s»: %s' % (name, plan.get('reason', '')[:120]))
+        return self._skill_store('skill-teach', name, plan['steps'], phrase)
+
+    def _skill_save(self, name):
+        last = self.skills.last()
+        if not last:
+            raise Denied('Ещё нечего запоминать: сначала выполните команду')
+        return self._skill_store('skill-save', name, last['steps'], last['phrase'])
+
+    def _skill_list(self):
+        items, fixes = self.skills.items(), self.skills.corrections()
+        learned = (' Понимаю по-новому: %s.' % ', '.join('«%s»' % f['phrase'] for f in fixes[:5])) if fixes else ''
+        if not items:
+            return {'status': 'PASS', 'items': [], 'corrections': fixes,
+                    'speech': 'Навыков пока нет. Научите: «когда я говорю «кино», включи режим кино».' + learned}
+        return {'status': 'PASS', 'items': items, 'corrections': fixes,
+                'speech': 'Навыки: %s.' % ', '.join('«%s»' % i['name'] for i in items[:10]) + learned}
+
+    def _skill_forget(self, name):
+        self.session.confirm({'task': 'skill-forget', 'name': name[:40]})
+        item = self.skills.forget(name)
+        self.ws.journal.record('skill-forget', 'PASS', skill=item['name'] if item else None, rollback=[])
+        return {'status': 'PASS', 'speech': 'Забыл навык «%s».' % item['name'] if item else 'Такого навыка нет.'}
+
+    @property
+    def tv_cast(self):
+        if getattr(self, '_tv_cast', None) is None:
+            from .tv_cast import TvCast
+            self._tv_cast = TvCast()
+        return self._tv_cast
+
+    def _tv_link(self, code):
+        self.session.confirm({'task': 'tv-link'})
+        name = self.tv_cast.pair(code)
+        self.ws.journal.record('tv-link', 'PASS', screen=str(name)[:60], rollback=[])
+        return {'status': 'PASS', 'speech': 'Привязал YouTube на телевизоре «%s». Теперь видео можно отправлять на ТВ.' % name}
+
+    @property
+    def tv_media(self):
+        if getattr(self, '_tv_media', None) is None:  # kept for the life of the process: the relay lives here
+            from .tv_media import TvMedia
+            self._tv_media = TvMedia(self.ws.state, self.media.tv._credentials()[0])
+        return self._tv_media
+
+    def _tv_play(self, url):
+        """Any web video -> the TV (Cast: YouTube app, or relayed through the PC); a TV in standby is
+        switched on first (never off). YouTube falls back to the paired YouTube link if Cast fails."""
+        import urllib.parse
+        from .tv_cast import parse_link
+        from .tv_media import check_url
+        url = check_url(url)
+        host = urllib.parse.urlsplit(url).hostname
+        self.session.confirm({'task': 'tv-play', 'host': host})
+        woke = False
+        from .tv_home_assistant import HomeAssistantTv
+        ha_tv = getattr(self, '_ha_tv', None) or HomeAssistantTv()
+        try:
+            ha_woke = ha_tv.wake()
+        except Exception:  # HA unavailable: preserve the existing Sony path
+            ha_woke = None
+        try:
+            if ha_woke is None:
+                if self.media.tv.state().get('power') != 'active':
+                    self.media.tv.power(True)
+                    woke = True
+            else:
+                woke = ha_woke
+            if woke:
+                time.sleep(getattr(self, "tv_wake_wait", 8))
+        except Exception:  # the TV's own API is down: Cast may still answer
+            pass
+        try:
+            parse_link(url)
+        except Denied:
+            pass
+        else:
+            try:
+                ha_tv.open_youtube()
+            except Exception:  # preserve Cast when HA is unavailable
+                pass
+        try:
+            out = self.tv_media.play(url)
+        except Exception as exc:
+            try:
+                video, start = parse_link(url)
+            except Denied:
+                video = None
+            if not (video and self.tv_cast.store.configured()):
+                self.ws.journal.record('tv-play', 'FAILED', host=host, reason=str(exc)[:120], rollback=[])
+                if video:
+                    raise Denied('Не удалось передать видео через Cast. Нужна привязка YouTube: на ТВ откройте '
+                                 'YouTube → Настройки → Подключить по коду; затем «привяжи телевизор, код …»') from None
+                raise exc if isinstance(exc, Denied) else Denied('Телевизор не ответил: %s' % type(exc).__name__)
+            try:
+                if not self.tv_cast.play(video, start):
+                    raise Denied('YouTube не подтвердил приём видео на телевизоре')
+            except Exception as exc:
+                self.ws.journal.record('tv-play', 'FAILED', host=host, reason='youtube-link failed', rollback=[])
+                if isinstance(exc, Denied):
+                    raise
+                raise Denied('Не удалось передать видео через привязку YouTube: ' + type(exc).__name__) from None
+            out = {'kind': 'youtube-link', 'video': video}
+        playback = {'confirmed': out['kind'] == 'relay'}
+        if out['kind'] in ('youtube', 'youtube-link') and self.tv_cast.store.configured():
+            try:
+                observed = self.tv_cast.status()
+                playback.update(observed)
+                playback['confirmed'] = (observed.get('video_id') == out.get('video')
+                                         and observed.get('state') == 'playing')
+            except Exception:
+                playback['confirmed'] = False
+        self.ws.journal.record('tv-play', 'PASS', host=host, kind=out['kind'], woke=woke,
+                               playback=playback, rollback=[])
+        title = out.get('title')
+        if playback['confirmed']:
+            speech = 'На телевизоре воспроизводится выбранное видео%s.' % (': ' + title if title and out['kind'] == 'relay' else '')
+        else:
+            speech = 'Команда передана. Воспроизведение выбранного видео на телевизоре ещё не подтверждено.'
+        return {'status': 'PASS', 'speech': speech, 'playback': playback}
+
+    def _skill_unlearn(self, phrase):
+        self.session.confirm({'task': 'skill-unlearn', 'phrase': phrase[:60]})
+        item = self.skills.unlearn(phrase)
+        self.ws.journal.record('skill-unlearn', 'PASS', found=bool(item), rollback=[])
+        return {'status': 'PASS', 'speech': 'Забыл поправку «%s».' % phrase[:60] if item else 'Такой поправки нет.'}
+
+    def _routine_speaker(self, name, sp, scenario_id):
+        """'Я дома': greeting, then music. 'Доброе утро': volume 4, the briefing, then music.
+        Music = the owner's Yandex scenario of the same name when it exists, else Alice's "моя музыка"."""
+        def music():
+            if scenario_id:
+                self.yandex.scenario(scenario_id)
+            else:
+                sp.command('включи мою музыку')
+        if name == 'home':
+            sp.say('С возвращением, %s.' % (self.profile.load().get('name') or 'сэр'))
+            sp.sleep(2.5)  # let the greeting finish before the music starts
+            music()
+            return 'Колонка поздоровалась, музыка включена.'
+        import threading
+        sp.volume(4)
+        text = self._briefing(with_doctor=False)['text']
+
+        def read_then_play():
+            try:
+                chunks = sp.say_long(text)
+                sp.sleep(len(chunks[-1]) / 14 + 1 if chunks else 0)  # let the last sentence finish
+                music()
+            except Exception as exc:
+                print('morning speaker:', type(exc).__name__, str(exc)[:120], flush=True)
+        threading.Thread(target=read_then_play, name='jarvis-morning-briefing').start()
+        return 'Колонка: громкость 4, читает утреннюю сводку, потом музыка.'
+
+    def _station_status(self):
+        s = self.station.state()
+        playing = ' Играет: %s%s.' % (s['artist'] + ' — ' if s['artist'] else '', s['title']) if s['title'] else ''
+        return {'status': 'PASS', **s, 'speech': 'Колонка: %s, громкость %s.%s' % (
+            {'playing': 'играет', 'paused': 'на паузе', 'idle': 'ждёт'}.get(s['state'], s['state']), s['volume'], playing)}
+
+    def _station_text(self, task, text, limit):
+        text = ' '.join(text.split()) if isinstance(text, str) else ''
+        if not 1 <= len(text) <= limit:
+            raise Denied('Текст для колонки: от 1 до %d символов' % limit)
+        self.session.confirm({'task': task, 'text': text})
+        (self.station.say if task == 'station-say' else self.station.command)(text)
+        self.ws.journal.record(task, 'PASS', text=text, rollback=[])
+        return {'status': 'PASS', 'speech': 'Сказал на колонке.' if task == 'station-say' else 'Передал Алисе: ' + text}
+
+    def _station_say(self, text):
+        return self._station_text('station-say', text, 300)
+
+    def _station_command(self, text):
+        return self._station_text('station-command', text, 200)
+
+    def _station_volume(self, level):
+        if type(level) is not int or not 0 <= level <= 10:
+            raise Denied('Громкость колонки 0..10')
+        self.session.confirm({'task': 'station-volume', 'level': level})
+        ok = self.station.volume(level)
+        self.ws.journal.record('station-volume', 'PASS' if ok else 'UNVERIFIED', level=level, rollback=[])
+        return {'status': 'PASS' if ok else 'WARN', 'verified': ok,
+                'speech': 'Громкость колонки %d.' % level if ok else 'Колонка не подтвердила громкость %d.' % level}
+
+    def _station_control(self, action):
+        from .station import CONTROLS
+        if action not in CONTROLS:
+            raise Denied('Unknown station action')
+        self.session.confirm({'task': 'station-control', 'action': action})
+        self.station.control(action)
+        self.ws.journal.record('station-control', 'PASS', action=action, rollback=[])
+        return {'status': 'PASS', 'speech': {'pause': 'Колонка на паузе.', 'play': 'Колонка играет дальше.',
+                                             'next': 'Следующий трек на колонке.', 'previous': 'Предыдущий трек на колонке.'}[action]}
+
     def _home_devices(self):
         info = self.yandex.info()
         lit = [d['name'] for d in info['devices'] if d['kind'] and d['on']]
@@ -582,7 +843,14 @@ class UnifiedTaskRouter:
         done, failed = self.yandex.act(targets, **change) if targets else ([], [])
         norm = lambda s: s.lower().replace('ё', 'е')
         hit = [s for s in info['scenarios'] if norm(s['name']) == norm(title)]
-        if hit:
+        self.set_presence(name != 'away')
+        said, sp = '', self.speaker() if speaker else None
+        if sp is not None:  # the station speaks first, then the owner's scenario (or Alice) plays the music
+            try:
+                said = self._routine_speaker(name, sp, hit[0]['id'] if hit else None)
+            except Exception as exc:  # the lights already switched: report the speaker apart
+                said = 'Колонка не ответила (%s).' % str(exc)[:80]
+        elif hit:
             self.yandex.scenario(hit[0]['id'])
         tv = False
         if name == 'away':
@@ -592,7 +860,7 @@ class UnifiedTaskRouter:
             except Exception:  # no TV configured or it is already off: the house part already happened
                 pass
         self.ws.journal.record('home-routine', 'PASS' if not failed else 'WARN', routine=name, devices=done,
-                               failed=failed, scenario=bool(hit), tv_off=tv, rollback=[])
+                               failed=failed, scenario=bool(hit), speaker=bool(said), tv_off=tv, rollback=[])
         if lights is None:
             speech = 'Выключил: %s.' % ', '.join(done + (['Телевизор'] if tv else [])) if done or tv else ''
         else:
@@ -602,7 +870,9 @@ class UnifiedTaskRouter:
                 speech += ' Тёплый оттенок.'
         if failed:
             speech += ' Не ответили: %s.' % ', '.join(failed)
-        if hit:
+        if said:
+            speech += ' ' + said
+        elif hit:
             speech += ' Сценарий «%s» запущен.' % hit[0]['name']
         elif speaker:
             speech += ' Чтобы колонка %s, создайте сценарий «%s» в «Доме с Алисой».' % (speaker, title)

@@ -2,10 +2,12 @@
 #   1) waits (up to -WaitSeconds) for DNS + Tailscale, because at logon both are often not ready yet
 #   2) starts the phone side (jarvis_phone_start.ps1 -NoVoiceLoop) unless the gateway already answers
 #   3) starts the desktop JARVIS (JARVIS-copy\main.py) unless it already runs
-#   4) every 30 s: restarts whatever died (at most 5 restarts per part per 10 min, then gives up and logs it)
+#   4) starts what JARVIS depends on: Ollama, Docker Desktop + containers (SearXNG, Home Assistant for the station)
+#   5) every 30 s: restarts background services; desktop starts once unless -RestartDesktop is explicit
+# Windows autostart is off for JARVIS, Ollama and Docker: this script is the one place that starts them.
 # Log: %LOCALAPPDATA%\JARVIS\boot.log (desktop app output: desktop.log / desktop.err.log)
 # Stop: close this hidden process (Task Manager: powershell with jarvis_boot.ps1) or run with -Once.
-param([int]$WaitSeconds = 180, [switch]$Once, [switch]$NoDesktop)
+param([int]$WaitSeconds = 180, [switch]$Once, [switch]$NoDesktop, [switch]$RestartDesktop)
 $ErrorActionPreference = 'Continue'
 $dev = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $root = Split-Path -Parent (Split-Path -Parent $dev)  # coding-agent -> jarvis-coding-agent-dev -> p6-recovery
@@ -23,7 +25,8 @@ function Log([string]$m) {
 
 # one watchdog at a time
 $mutex = New-Object System.Threading.Mutex($false, 'Local\JARVIS_BOOT_WATCHDOG')
-if (-not $mutex.WaitOne(0)) { Log 'another jarvis_boot is already running; exit'; exit 0 }
+try { $ownsBootMutex = $mutex.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $ownsBootMutex = $true }
+if (-not $ownsBootMutex) { Log 'another jarvis_boot is already running; exit'; exit 0 }
 
 function Test-Port([int]$p) {
     try { $c = New-Object Net.Sockets.TcpClient; $ok = $c.ConnectAsync('127.0.0.1', $p).Wait(1500); $c.Close(); $ok } catch { $false }
@@ -44,10 +47,17 @@ function Start-GigaAM {
     $gs = "& '$speechPy' -I '$(Join-Path $dev 'developer_core\jarvis_local\gigaam_server.py')' --port 10792"
     Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -ArgumentList @('-NoProfile','-NoExit','-Command',$gs) -WindowStyle Minimized
 }
-# web answers need the owner's SearXNG container (Docker Desktop, 127.0.0.1:8888)
+# answers and planning need the local model server (127.0.0.1:11434)
+$ollamaApp = Join-Path $env:LOCALAPPDATA 'Programs\Ollama\ollama app.exe'
+function Start-Ollama {
+    if ((Test-Port 11434) -or -not (Test-Path -LiteralPath $ollamaApp)) { return }
+    Start-Process -FilePath $ollamaApp
+    Log 'ollama started'
+}
+# web answers need SearXNG (127.0.0.1:8888), the station needs Home Assistant (8123); both run in Docker Desktop
 $dockerApp = Join-Path $env:LOCALAPPDATA 'Programs\DockerDesktop\Docker Desktop.exe'
 $dockerCli = Join-Path $env:LOCALAPPDATA 'Programs\DockerDesktop\resources\bin\docker.exe'
-function Start-Search {
+function Start-Containers {
     if (-not (Test-Path -LiteralPath $dockerCli)) { return }
     if (-not (Get-Process 'Docker Desktop' -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath $dockerApp)) {
         Start-Process -FilePath $dockerApp -WindowStyle Minimized
@@ -58,8 +68,8 @@ function Start-Search {
         if ($LASTEXITCODE -eq 0) { break }
         Start-Sleep 5
     }
-    $out = & $dockerCli start jarvis-searxng 2>&1 | Out-String
-    Log ("searxng start: " + ($out -replace '\s+', ' ').Trim())
+    $out = & $dockerCli start jarvis-searxng homeassistant 2>&1 | Out-String
+    Log ("containers start: " + ($out -replace '\s+', ' ').Trim())
 }
 function Start-Desktop {
     if (-not (Test-Path -LiteralPath $pyw)) { Log "desktop python missing: $pyw"; return }
@@ -94,10 +104,15 @@ function Warm-Model {
         Log 'model qwen3:8b warmed'
     } catch { Log ('model warm failed: ' + $_.Exception.Message) }
 }
+Start-Ollama
 Warm-Model
 
-# 2-4) start + watch
-$restarts = @{ phone = @(); desktop = @(); search = @() }
+function Should-StartDesktop([bool]$Running, [bool]$Started, [bool]$Disabled, [bool]$Restart) {
+    return (-not $Disabled -and -not $Running -and (-not $Started -or $Restart))
+}
+
+# 2-5) start + watch
+$restarts = @{ phone = @(); desktop = @(); containers = @(); ollama = @() }
 function Allow([string]$k) {
     $now = Get-Date
     $restarts[$k] = @($restarts[$k] | Where-Object { $_ -gt $now.AddMinutes(-10) })
@@ -105,6 +120,8 @@ function Allow([string]$k) {
     $restarts[$k] += $now; $true
 }
 $gaveUp = @{}
+$desktopSeen = $false
+$desktopClosedLogged = $false
 while ($true) {
     if (-not (Test-Port 10790)) {
         if (Allow 'phone') { Log 'gateway down -> start phone side'; Start-Phone } elseif (-not $gaveUp.phone) { Log 'phone side keeps failing: gave up for 10 min'; $gaveUp.phone = 1 }
@@ -112,10 +129,19 @@ while ($true) {
         $gaveUp.phone = 0
         if ((Test-Path -LiteralPath $speechPy) -and -not (Test-Port 10792) -and -not (Get-CimInstance Win32_Process -Filter "Name like 'python%'" | Where-Object { $_.CommandLine -match 'gigaam_server\.py' }) -and (Allow 'gigaam')) { Log 'gigaam down -> start'; Start-GigaAM }
     }
-    if (-not $NoDesktop -and -not (Get-Desktop)) {
-        if (Allow 'desktop') { Log 'desktop app not running -> start'; Start-Desktop } elseif (-not $gaveUp.desktop) { Log 'desktop app keeps crashing: gave up for 10 min, see desktop.err.log'; $gaveUp.desktop = 1 }
-    } else { $gaveUp.desktop = 0 }
-    if ((Test-Path -LiteralPath $dockerCli) -and -not (Test-Port 8888) -and (Allow 'search')) { Log 'searxng down -> start'; Start-Search }
+    $desktopRunning = [bool](Get-Desktop)
+    if ($desktopRunning) { $desktopSeen = $true; $desktopClosedLogged = $false }
+    if (Should-StartDesktop $desktopRunning $desktopSeen ([bool]$NoDesktop) ([bool]$RestartDesktop)) {
+        if (Allow 'desktop') { Log 'desktop startup -> start once'; Start-Desktop; $desktopSeen = $true } elseif (-not $gaveUp.desktop) { Log 'desktop restart limit reached'; $gaveUp.desktop = 1 }
+    } else {
+        $gaveUp.desktop = 0
+        if ($desktopSeen -and -not $desktopRunning -and -not $RestartDesktop -and -not $desktopClosedLogged) {
+            Log 'desktop closed -> respecting user shutdown; background services remain watched'
+            $desktopClosedLogged = $true
+        }
+    }
+    if ((Test-Path -LiteralPath $dockerCli) -and -not ((Test-Port 8888) -and (Test-Port 8123)) -and (Allow 'containers')) { Log 'searxng or home assistant down -> start'; Start-Containers }
+    if (-not (Test-Port 11434) -and (Allow 'ollama')) { Log 'ollama down -> start'; Start-Ollama }
     if ($Once) { break }
     Start-Sleep 30
 }

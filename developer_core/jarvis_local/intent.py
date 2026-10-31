@@ -337,6 +337,14 @@ PROFILE_RULES = (
     (r'^(?:запомни,? что )?(?:я люблю|мне нравится|я обожаю) (.{2,200})$', 'like'),
     (r'^(?:запомни,? что )?(?:я увлекаюсь|я занимаюсь|мо[её] хобби(?: —| -|:)?|мои хобби(?: —| -|:)?) (.{2,200})$', 'hobby'),
     (r'^запомни,? что (.{2,200})$', 'fact'),
+    # said in passing, without "запомни": facts about the owner are learned too (shown by "что ты обо мне знаешь")
+    (r'^(?:кстати,? )?((?:у меня (?:есть )?|мо(?:й|я|ю|его|ей) )(?:собак|пёс|пес|пса|кошк|кот|жен|муж|сын|доч|'
+     r'брат|сестр|девушк|парн|друг|подруг|мам|пап|отц|бабушк|дедушк)\w*(?: зовут| по имени)? [а-яёa-z\-]{2,30}'
+     r'(?: [а-яёa-z\-]{2,30})?)$', 'fact'),
+    (r'^(?:кстати,? )?(я (?:живу|работаю|учусь|родился|родилась) .{2,80})$', 'fact'),
+    (r'^(?:кстати,? )?(мо(?:й|ё|е) день рожд\w+ .{2,40})$', 'fact'),
+    (r'^(?:кстати,? )?(мне \d{1,2} (?:год|года|лет))$', 'fact'),
+    (r'^(?:кстати,? )?(мо(?:й|я|ё|е|и) любим\w+ .{2,80})$', 'fact'),
 )
 
 
@@ -397,6 +405,41 @@ def music_plan(text):
     for pattern, action in MUSIC_RULES:
         if re.search(pattern, low) and not re.search(r'телевизор|саундбар|громкост', low):
             return [_step('music', action=action)]
+    return []
+
+
+STATION = r'(?:(?:на|через|в|у)\s+)?(?:яндекс\s+)?(?:колонк[аеуиой]\w*|станци(?:я|ю|и|ей)|алис[аеуы])\b'
+
+
+def station_plan(text):
+    """Yandex Station: 'скажи на колонке ...', 'попроси Алису ...', 'громкость колонки 5', 'колонку на паузу'."""
+    t = re.sub(r'^(джарвис|jarvis),?\s*', '', text.strip(), flags=re.I).strip(' .!?')
+    low = t.lower()
+    if not re.search(STATION, low):
+        return []
+    m = re.match(r'^(?:попроси|скажи|передай)\s+алис[еуы]\b[\s,:]*(.+)$', t, re.I) or re.match(r'^алиса[\s,]+(.+)$', t, re.I)
+    if m:
+        return [_step('station-command', text=m.group(1).strip(' «»"'))]
+    m = re.match(r'^(?:скажи|объяви|произнеси)\s+%s[\s,:]+(.+)$' % STATION, t, re.I) or \
+        re.match(r'^%s[\s,]+(?:скажи|объяви)[\s,:]+(.+)$' % STATION, t, re.I)
+    if m:
+        return [_step('station-say', text=m.group(1).strip(' «»"'))]
+    m = re.search(r'громкост\w*\s+(?:на\s+)?%s\s+(?:на\s+)?(\d{1,2})\b|%s\s+(?:на\s+)?громкост\w*\s+(?:на\s+)?(\d{1,2})\b'
+                  % (STATION, STATION), low)
+    if m:
+        level = int(m.group(1) or m.group(2))
+        return [_step('station-volume', level=level)] if level <= 10 else []
+    if re.search(r'^что\s+(?:сейчас\s+)?(?:играет|звучит)|^что\s+(?:с|на)\s+колонк', low):
+        return [_step('station-status')]
+    rest = re.sub(r'\s+', ' ', re.sub(STATION, ' ', low)).strip()
+    if re.fullmatch(r'(?:останови|выключи|стоп|заглуши)', rest):
+        return [_step('station-control', action='pause')]
+    for pattern, action in MUSIC_RULES:
+        if re.search(pattern, rest):
+            return [_step('station-control', action=action)]
+    said = re.sub(r'\s+', ' ', re.sub(STATION, ' ', t, flags=re.I)).strip(' ,')
+    if re.match(r'(?:включи|поставь|запусти)\s+\S', said, re.I):  # "включи на колонке джаз" -> Alice: "включи джаз"
+        return [_step('station-command', text=said)]
     return []
 
 
@@ -554,17 +597,63 @@ def chat_plan(text):
     return []
 
 
+SKILL_NAME = r'[«"“]?([^«»"“”,]{2,40}?)[»"”]?'
+
+
+TV_WORD = r'(?:телевизор\w*|тв|телик\w*|ящик)'
+
+
+def tv_plan(text):
+    # A video link to the TV, and the one-time YouTube pairing code. Whole phrase, before any split.
+    t = re.sub(r'^(?:джарвис|jarvis),?\s*', '', text.strip().rstrip('.!'), flags=re.I)
+    m = re.fullmatch(r'(?:(?:покажи|включи|запусти|отправь|выведи|кинь|поставь|открой)(?: это| видео| ролик)? )?'
+                     r'на %s[:,]?\s+(https?://\S{4,500})' % TV_WORD, t, re.I) or \
+        re.fullmatch(r'(https?://\S{4,500})\s+на %s' % TV_WORD, t, re.I)
+    if m:
+        return [_step('tv-play', url=m.group(1))]
+    m = re.fullmatch(r'(?:привяжи|подключи|свяжи) (?:%s|ютуб\w*|youtube)(?: к (?:ютубу|youtube|%s))?,?'
+                     r'(?: по)?(?: код\w*)?[:,\s]+([\d][\d\s-]{10,22}\d)' % (TV_WORD, TV_WORD), t, re.I)
+    if m and len(re.sub(r'\D', '', m.group(1))) == 12:
+        return [_step('tv-link', code=re.sub(r'\D', '', m.group(1)))]
+    return None
+
+
+def skill_plan(text):
+    """Teaching JARVIS a skill: matched on the whole phrase, before anything else splits it."""
+    t = re.sub(r'^(?:джарвис|jarvis),?\s*', '', text.strip().rstrip('.!'), flags=re.I)
+    m = re.fullmatch(r'когда я (?:говорю|скажу) (?:[«"“]([^«»"“”]{2,40})[»"”],?|([^«»"“”,]{2,40}),)\s*(?:то\s+|ты\s+)?(.{3,300})',
+                     t, re.I | re.S)
+    if m:
+        return [_step('skill-teach', name=(m.group(1) or m.group(2)).strip(), phrase=m.group(3).strip())]
+    m = re.fullmatch(r'запомни (?:это|последнее|последнюю команду|эту команду) как ' + SKILL_NAME, t, re.I)
+    if m:
+        return [_step('skill-save', name=m.group(1).strip())]
+    m = re.fullmatch(r'забудь навык ' + SKILL_NAME, t, re.I)
+    if m:
+        return [_step('skill-forget', name=m.group(1).strip())]
+    m = re.fullmatch(r'забудь поправку [«"“]?(.{2,300}?)[»"”]?', t, re.I)
+    if m:
+        return [_step('skill-unlearn', phrase=m.group(1).strip())]
+    if re.fullmatch(r'(?:какие (?:у тебя )?навыки(?: ты знаешь| есть)?|покажи (?:мои )?навыки|мои навыки|'
+                    r'чему ты научился)\??', t, re.I):
+        return [_step('skill-list')]
+    if re.fullmatch(r'(?:где (?:мой )?телефон|телефон дома|(?:сколько|какой) заряд\w* (?:у |на )?(?:моего )?телефон\w*|'
+                    r'заряд телефона)\??', t, re.I):
+        return [_step('phone-status')]
+    return None
+
+
 def understand(text):
     if not isinstance(text, str) or not text.strip() or len(text) > 2000:
         return {'intent': 'unknown', 'steps': [], 'reason': 'Пустая или слишком длинная команда'}
-    steps = chat_plan(text)
+    steps = tv_plan(text) or skill_plan(text) or chat_plan(text)
     if steps:
         return {'intent': 'plan', 'steps': steps, 'summary': describe(steps)}
     # "привет, включи свет": the greeting is politeness, the rest is the command
     rest = re.sub(r'^\s*(?:%s)[\s,!.]+(?:(?:джарвис|jarvis)[\s,!.]+)?' % GREET, '', text, flags=re.I)
     if rest != text and rest.strip():
         text = rest
-    steps = reminder_plan(text) or music_plan(text) or home_plan(text) or web_plan(text) or browser_plan(text) or \
+    steps = reminder_plan(text) or station_plan(text) or music_plan(text) or home_plan(text) or web_plan(text) or browser_plan(text) or \
         docs_merge_plan(text) or apps_plan(text)
     if steps:
         return {'intent': 'plan', 'steps': steps, 'summary': describe(steps)}
@@ -653,6 +742,12 @@ NAMES = {'status': 'показать статус', 'audit': 'показать �
          'home-devices': 'устройства умного дома', 'home-switch': 'включить/выключить свет или розетку',
          'home-brightness': 'яркость света', 'home-scenario': 'сценарий умного дома',
          'home-routine': 'домашний режим (я дома / ушёл / утро / вечер)',
+         'station-status': 'что на колонке', 'station-say': 'сказать на колонке', 'station-command': 'попросить Алису',
+         'station-volume': 'громкость колонки', 'station-control': 'пауза / дальше / трек на колонке',
+         'phone-status': 'где телефон и сколько заряда', 'skill-teach': 'выучить навык',
+         'skill-save': 'запомнить последнюю команду как навык', 'skill-list': 'показать навыки',
+         'skill-forget': 'забыть навык', 'skill-unlearn': 'забыть поправку',
+         'tv-play': 'показать видео на телевизоре', 'tv-link': 'привязать YouTube на телевизоре',
          'screen-describe': 'рассказать, что на экране', 'web-answer': 'найти ответ в интернете',
          'app-open': 'открыть программу, папку или сайт', 'file-open': 'открыть найденный файл',
          'desktop-show': 'свернуть все окна', 'windows-list': 'какие программы открыты',

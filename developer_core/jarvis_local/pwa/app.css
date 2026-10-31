@@ -205,3 +205,9 @@ nav { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; margin-bot
 /* station fills the screen: HUD on top, the command bar at the bottom */
 #station:not([hidden]) { display: flex; flex-direction: column; min-height: calc(100dvh - 120px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); }
 #station .askbar { margin-top: auto; }
+/* share-sheet how-to in settings */
+.howto { margin-top: 10px; color: var(--text); font-size: 14px; }
+.howto summary { cursor: pointer; color: var(--cyan); padding: 6px 0; }
+.howto ol { margin: 6px 0; padding-left: 20px; line-height: 1.5; }
+.howto .hud { text-transform: none; letter-spacing: .02em; }
+button.link { display: inline; min-height: 0; padding: 0; border: 0; background: none; color: var(--cyan); text-decoration: underline; font: inherit; }
