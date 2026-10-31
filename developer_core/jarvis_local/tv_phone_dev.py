@@ -190,11 +190,14 @@ def main():
     parser.add_argument('--mobile', type=Path, required=True)
     parser.add_argument('--host', required=True)
     parser.add_argument('--port', type=int, default=10797)
+    parser.add_argument('--state-root', type=Path)
+    parser.add_argument('--tv-host')
+    parser.add_argument('--relay-port', type=int, default=10799)
     args = parser.parse_args()
     import re
     if not re.fullmatch(r'[a-z0-9.-]+\.ts\.net:8443', args.host):
         parser.error('expected private Tailscale host with :8443')
-    root = Path(__file__).resolve().parents[2] / '.tv-phone-dev'
+    root = args.state_root or Path(__file__).resolve().parents[2] / '.tv-phone-dev'
     workspace = root / 'workspace'
     workspace.mkdir(parents=True, exist_ok=True)
     gateway = build(workspace, '', 0, say_wait=.5)
@@ -202,10 +205,14 @@ def main():
     executor = PhoneExecutor(workspace, router=router)
     # Prepare this DEV instance's relay under the same canonical workspace.
     from .tv_media import Relay, lan_ip
+    if args.tv_host:
+        from .dev_desktop import validate_tv_host
+        from .tv_media import TvMedia
+        router._tv_media = TvMedia(router.ws.state, validate_tv_host(args.tv_host))
     media = router.tv_media
     from .tv_web_video import resolve_with_browser
     media.resolver = resolve_with_browser
-    relay = Relay(media.state, lan_ip(media.tv_host), port=10799)
+    relay = Relay(media.state, lan_ip(media.tv_host), port=args.relay_port)
     media._relay = relay  # dedicated DEV port; never compete with the existing 10795 relay
     relay._serve()
     (root / 'relay-status.json').write_text(json.dumps({

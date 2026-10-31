@@ -33,11 +33,14 @@ TOOLS = [{'type':'namespace','name':'phone','description':'Инструмент�
 class ChatGPT:
     def __init__(self, bridge_path=None):
         self.bridge_path = bridge_path or Path(__file__).with_name('chatgpt_plan_engine.py')
+        self._default_bridge = bridge_path is None
         self.bridge = None
         self.lock = threading.Lock()
         self.cached = (0, {})
 
     def _bridge(self):
+        if self.bridge is None and self._default_bridge:
+            self.bridge = importlib.import_module('.chatgpt_plan_engine', __package__)
         if self.bridge is None:
             spec = importlib.util.spec_from_file_location('jarvis_phone_plan_bridge', self.bridge_path)
             module = importlib.util.module_from_spec(spec)
