@@ -13,3 +13,15 @@ check_frozen_dev_package.py validates relocation, an empty user profile, GUI cre
 Installed versions live in %LOCALAPPDATA%\JARVIS-DEV-Station\versions; current.json selects the version. User data lives in data; protected ChatGPT credentials continue using the existing shared account store. No production paths or startup entries are modified.
 
 The optional bundled phone gateway uses --gateway --phone-host <name.ts.net:8443> --tv-host <LAN-IPv4>, default HTTP port 10817 and relay 10818. It needs explicitly configured external routing. Installing the package does not change Tailscale or existing phone gateways.
+
+## Single-file Windows installer
+
+`packaging/jarvis-dev.iss` wraps the already verified v1.4.3 payload without rebuilding or changing it. Installation is per-user with a unique DEV AppId, an owned Start menu shortcut and a Windows uninstall entry. The existing versioned deployment helper verifies the complete payload before selecting it. The installer rejects a different destination, reparse points and an open desktop instance; it never terminates the desktop or phone services. Uninstall removes only installer-owned files and explicit launch metadata, preserving user data, shared account credentials and separately installed older versions.
+
+Build on Windows with Windows Sandbox enabled. Obtain `innosetup-7.1.1-x64.exe` from the official source in `compiler-provenance.json`, verify its Authenticode publisher and SHA256, then prepare an isolated build:
+
+    python scripts/build_windows_installer.py --bundle <verified-v1.4.3-bundle> --compiler <official-compiler.exe> --previous-bundle <verified-v1.4.2-bundle>
+
+The script emits `.packaging-dev/latest-installer-build.json` with the WSB configuration path. Open that configuration in Windows Sandbox. Only the allowlisted build inputs and payloads are mapped read-only; the dedicated reports/output directory is writable. Networking and clipboard are disabled, and no account stores are mapped. The guest installs the compiler, builds Setup.exe and checks installation, all installed hashes, GUI, Chromium/FFmpeg, repeated installation, active-instance/path guards, uninstall, upgrade from v1.4.2 and rollback. It writes result.json and shuts down only the guarded Sandbox guest. A successful result is required before delivering the setup executable. No compiler is installed on the host.
+
+The JARVIS setup executable is unsigned; the compiler's signature does not sign generated installers. User instructions: docs/INSTALL_WINDOWS_RU.md.
