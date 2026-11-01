@@ -2,6 +2,11 @@
 
 [Русский](#русский) · [English](#english)
 
+**Windows desktop assistant with an independent iOS/Android PWA.** Optional PC pairing uses the JARVIS gateway; source reuse requires written permission.
+
+[Quick start and setup guide (RU / EN)](docs/QUICKSTART.md) · [Standalone mobile client](mobile-standalone/README.md) · [Phone-to-PC station guide](docs/PHONE_STATION_RU.md)
+
+
 > **© 2026 Roman Makhar. Код открыт для просмотра, а использовать его можно только с моего письменного разрешения.**
 > Запросить разрешение: [Issue «Permission request»](https://github.com/Mybrohugs/jarvis/issues/new?title=Permission%20request%20%2F%20%D0%97%D0%B0%D0%BF%D1%80%D0%BE%D1%81%20%D1%80%D0%B0%D0%B7%D1%80%D0%B5%D1%88%D0%B5%D0%BD%D0%B8%D1%8F) · [LICENSE](LICENSE)
 >
