@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self' https://api.anthropic.com https://generativelanguage.googleapis.com https://www.googleapis.com https://api.open-meteo.com https://geocoding-api.open-meteo.com https://*.ts.net https://cdn.jsdelivr.net; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="JARVIS">
+<meta name="theme-color" content="#02060a">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" href="icon-180.png">
+<link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="mobile.css">
+<title>JARVIS</title>
+</head>
+<body>
+<main id="app" class="screen">
+  <header class="brand">
+    <h1>J.A.R.V.I.S.</h1>
+    <span class="hud status"><span id="dot" class="dot"></span><span id="conn">в сети</span></span>
+    <button id="gear" class="icon" type="button" aria-label="Настройки">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/></svg>
+    </button>
+  </header>
+  <nav class="tabs3">
+    <button data-tab="station" class="tab on">Станция</button>
+    <button data-tab="calendar" class="tab">Календарь</button>
+    <button data-tab="files" class="tab">Файлы</button>
+  </nav>
+
+  <section id="station" class="pane">
+    <div class="hudwrap">
+      <div class="readout tl"><b id="clock">--:--</b><span id="date">--</span></div>
+      <div class="readout tr"><b id="pcmark">PC</b><span id="pcstate">нет связи</span></div>
+      <button id="reactor" class="reactor" type="button" aria-label="Говорить с JARVIS"><canvas id="orb" aria-hidden="true"></canvas></button>
+      <div class="readout bl"><b id="lvl">00</b><span>mic</span></div>
+      <div class="readout br"><b id="lat">--</b><span>ms</span></div>
+    </div>
+    <div id="state" class="label hud">нажмите и говорите</div>
+    <p id="reply" class="reply" aria-live="polite"></p>
+    <div id="extra" class="extra"></div>
+    <form id="ask" class="askbar">
+      <input id="say" maxlength="1000" placeholder="Команда…" enterkeyhint="send" autocomplete="off">
+      <button id="mic" class="icon" type="button" aria-label="Говорить">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg>
+      </button>
+      <button class="icon send" type="submit" aria-label="Передать">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h15M13 6l6 6-6 6"/></svg>
+      </button>
+    </form>
+  </section>
+
+  <section id="calendar" class="pane" hidden>
+    <div class="row"><button id="calrefresh" type="button" class="wide">Обновить</button></div>
+    <ul id="callist" class="list"></ul>
+  </section>
+
+  <section id="files" class="pane" hidden>
+    <h2 class="hud">С телефона на компьютер</h2>
+    <label class="wide filebtn">Выбрать файл и отправить<input id="upload" type="file" multiple></label>
+    <p id="upmsg" class="muted small"></p>
+    <h2 class="hud">С компьютера на телефон</h2>
+    <form id="findform" class="askbar">
+      <input id="findq" maxlength="100" placeholder="Имя файла на ПК…" autocomplete="off">
+      <button class="icon send" type="submit" aria-label="Найти"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5"/></svg></button>
+    </form>
+    <ul id="findlist" class="list"></ul>
+  </section>
+</main>
+
+<aside id="settings" class="sheet" hidden aria-label="Настройки">
+  <div class="sheet-body frame">
+    <div class="sheet-head"><span class="hud">настройки</span>
+      <button id="close" class="icon" type="button" aria-label="Закрыть"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+    <button id="briefing" type="button" class="wide">Брифинг</button>
+
+    <h2 class="hud">Мозг — Claude</h2>
+    <input id="claudekey" type="password" autocomplete="off" placeholder="ключ Claude (sk-ant-…)">
+    <select id="model">
+      <option value="claude-sonnet-5-5">Sonnet 5.5 — быстрый и умный</option>
+      <option value="claude-haiku-5-5">Haiku 5.5 — самый быстрый и дешёвый</option>
+      <option value="claude-opus-5-5">Opus 5.5 — самый умный, медленнее</option>
+    </select>
+
+    <h2 class="hud">Голос — Gemini</h2>
+    <input id="geminikey" type="password" autocomplete="off" placeholder="ключ Gemini (AIza…)">
+    <label class="check"><input id="speak" type="checkbox" checked> Озвучивать ответы</label>
+    <button id="soundtest" type="button" class="wide">Проверить звук</button>
+
+    <h2 class="hud">Google Календарь</h2>
+    <input id="gclient" autocomplete="off" placeholder="Client ID (….apps.googleusercontent.com)">
+    <button id="glogin" type="button" class="wide">Войти в Google</button>
+    <p id="gstate" class="muted small"></p>
+
+    <h2 class="hud">Компьютер (файлы)</h2>
+    <input id="pcurl" autocomplete="off" placeholder="https://ваш-пк.….ts.net">
+    <input id="pccode" inputmode="numeric" autocomplete="one-time-code" placeholder="6-значный код с ПК">
+    <button id="pcpair" type="button" class="wide">Подключить компьютер</button>
+    <p id="pcmsg" class="muted small"></p>
+
+    <h2 class="hud">Siri</h2>
+    <button id="siricopy" type="button" class="wide">Скопировать ключ для Siri</button>
+    <p class="muted small">Команды → «+» → «Продиктовать текст» → «Получить содержимое URL»: адрес из буфера, метод POST,
+      заголовок Authorization = ключ, тело JSON: text = «Продиктованный текст» → «Получить значение» speech →
+      «Произнести текст». Назовите команду «Джарвис» и скажите: «Привет, Siri, Джарвис».</p>
+    <p id="sirimsg" class="muted small"></p>
+
+    <h2 class="hud">Уведомления</h2>
+    <button id="pushon" type="button" class="wide">Включить уведомления с ПК</button>
+    <p class="muted small">Напоминания и сводки от JARVIS. На iPhone работают, только если JARVIS открыт с экрана «Домой».</p>
+    <p id="pushmsg" class="muted small"></p>
+
+    <h2 class="hud">Брифинг</h2>
+    <input id="city" autocomplete="off" placeholder="город для погоды">
+    <label class="check"><input id="awake" type="checkbox"> Экран не гаснет</label>
+
+    <h2 class="hud">Отладка</h2>
+    <label class="check"><input id="debug" type="checkbox"> Консоль отладки (Eruda)</label>
+    <p class="muted small">Кнопка консоли в углу экрана: ошибки, запросы к ПК и Claude. В ней видны ключи этого телефона — не показывайте экран посторонним.</p>
+
+    <button id="save" type="button" class="wide">Сохранить</button>
+    <button id="forget" type="button" class="wide danger">Стереть ключи и настройки с телефона</button>
+  </div>
+</aside>
+<script src="orb.js"></script>
+<script type="module" src="main.js"></script>
+</body>
+</html>

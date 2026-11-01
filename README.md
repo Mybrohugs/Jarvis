@@ -236,3 +236,14 @@ Features that need them report "not installed".
 ### Where things are
 Code: [`developer_core/jarvis_local/`](developer_core/jarvis_local/) · Third-party components: [`NOTICE.md`](NOTICE.md) · License: [`LICENSE`](LICENSE)
 
+
+
+## Приложения в этом репозитории / Applications in this repository
+
+- **JARVIS Local для Windows и связанный PWA-клиент** — основной проект в `developer_core/jarvis_local/`.
+- **Автономный мобильный PWA для iOS и Android** — отдельный клиент в [`mobile-standalone/`](mobile-standalone/README.md). Он может работать без домашнего компьютера; подключение к ПК остаётся дополнительной функцией.
+- Побайтно совпадающие файлы (лицензия, Exo 2, иконки и шар) повторно используют общие Git-объекты.
+
+- **JARVIS Local for Windows and its paired PWA client** — the main project in `developer_core/jarvis_local/`.
+- **Standalone iOS and Android PWA** — a separate client in [`mobile-standalone/`](mobile-standalone/README.md). It can work without the home PC; PC pairing remains optional.
+- Byte-identical files (license, Exo 2 fonts, icons, and orb) reuse existing Git objects.

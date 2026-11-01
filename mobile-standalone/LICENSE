@@ -1,0 +1,76 @@
+JARVIS Local — Source-Available License (Permission Required) / Лицензия «Код открыт для просмотра, использование — только с разрешения»
+Version 1.0, 2026-10-27
+
+Copyright © 2026 Roman Makhar (GitHub: @Mybrohugs). All rights reserved. / Все права защищены.
+
+======================================================================
+РУССКИЙ
+======================================================================
+
+1. Что можно без разрешения.
+   Просматривать и читать исходный код и документацию на GitHub. Делать форк внутри GitHub в той мере,
+   в какой это предусмотрено Условиями использования GitHub для публичных репозиториев, без запуска
+   и без использования кода вне GitHub.
+
+2. Что можно только с предварительного письменного разрешения правообладателя.
+   - запускать, устанавливать или использовать программу или её части;
+   - копировать код за пределы GitHub;
+   - изменять код или создавать производные работы;
+   - распространять, публиковать, сублицензировать или продавать;
+   - использовать в коммерческих целях, в том числе внутри компании или в сервисах;
+   - использовать код, документацию или тексты для обучения и дообучения моделей ИИ.
+
+3. Как получить разрешение.
+   Откройте Issue с заголовком «Permission request / Запрос разрешения» в репозитории
+   https://github.com/Mybrohugs/jarvis или напишите @Mybrohugs на GitHub. Опишите, кто вы, что именно
+   и для чего хотите использовать. Разрешение действует, только если правообладатель дал его письменно
+   (в Issue или в сообщении). Оно может быть ограничено по объёму, сроку и условиям и не передаётся
+   третьим лицам.
+
+4. Сторонние компоненты.
+   Сторонние библиотеки, модели, шрифты и сервисы, которые использует проект, остаются под своими
+   лицензиями и условиями (см. NOTICE.md). Эта лицензия на них не распространяется.
+
+5. Без гарантий.
+   Программа предоставляется «как есть», без каких-либо гарантий. Правообладатель не отвечает за любой
+   ущерб от её использования, в том числе разрешённого.
+
+6. Прекращение.
+   Любое нарушение этих условий автоматически прекращает все полученные разрешения.
+
+======================================================================
+ENGLISH
+======================================================================
+
+1. Allowed without permission.
+   Viewing and reading the source code and documentation on GitHub, and forking within GitHub to the
+   extent required by the GitHub Terms of Service for public repositories, without running the software
+   or using the code outside GitHub.
+
+2. Allowed only with the copyright holder's prior written permission.
+   - running, installing or using the software or any part of it;
+   - copying the code outside GitHub;
+   - modifying the code or creating derivative works;
+   - distributing, publishing, sublicensing or selling it;
+   - any commercial use, including internal company use or use in services;
+   - using the code, documentation or texts to train or fine-tune AI models.
+
+3. How to ask for permission.
+   Open an Issue titled "Permission request / Запрос разрешения" at https://github.com/Mybrohugs/jarvis
+   or contact @Mybrohugs on GitHub. Say who you are and what you want to use, and for what. Permission
+   is valid only when the copyright holder gives it in writing (in the Issue or a message). It may be
+   limited in scope, time and conditions, and it is not transferable.
+
+4. Third-party components.
+   Third-party libraries, models, fonts and services used by the project remain under their own licenses
+   and terms (see NOTICE.md). This license does not apply to them.
+
+5. No warranty.
+   The software is provided "as is", without warranty of any kind. The copyright holder is not liable
+   for any damage arising from its use, including permitted use.
+
+6. Termination.
+   Any breach of these terms automatically terminates all permissions granted.
+
+If the Russian and English versions differ, the Russian version prevails.
+При расхождении русской и английской версий приоритет имеет русская.

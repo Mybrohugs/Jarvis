@@ -1,0 +1,15 @@
+/* JARVIS Mobile: additions on top of the shared HUD stylesheet (app.css). */
+nav.tabs3 { grid-template-columns: repeat(3, 1fr); }
+.small { font-size: 13px; }
+.pane h2 { margin: 18px 0 8px; color: var(--cyan); }
+select { width: 100%; font: 500 15px var(--hud); color: var(--cyan2); background: rgba(2, 10, 18, .85);
+  border: 1px solid var(--line); border-radius: 2px; padding: 12px; margin: 8px 0; -webkit-appearance: none; appearance: none; }
+.filebtn { display: block; text-align: center; padding: 14px 16px; border: 1px solid var(--line); cursor: pointer; }
+.filebtn input { display: none; }
+.list li button { margin-top: 8px; font: 600 13px var(--hud); letter-spacing: .06em; color: var(--cyan2); }
+.list .when { font: 600 12px var(--hud); letter-spacing: .08em; color: var(--cyan); text-transform: uppercase; }
+.list .day { list-style: none; margin: 14px 0 0; padding: 0; border: 0; background: none; font: 600 11px var(--hud);
+  letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+.list .day::before { display: none; }
+.sheet input[type=password], .sheet input:not([type]), .sheet input[inputmode] { margin: 6px 0; }
+.ok { color: var(--ok); } .bad { color: var(--bad); }
