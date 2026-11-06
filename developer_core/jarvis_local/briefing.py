@@ -107,7 +107,10 @@ class Briefing:
                 '%s — %s' % (i['due'][11:16], i['text']) for i in today[:4]))
         pending = [i for i in self.r.phone_queue_items() if i['status'] == 'pending' and not i.get('auto')]
         if pending:
-            parts.append('С телефона ждут %d запрос(а). Первый: %s.' % (len(pending), pending[0]['text'][:80]))
+            from .pwa_gateway import plural
+            n = len(pending)
+            parts.append('С телефона %s %d %s. Первый: %s.' % (plural(n, 'ждёт', 'ждут', 'ждут'), n,
+                         plural(n, 'запрос', 'запроса', 'запросов'), pending[0]['text'][:80]))
         if doctor_summary:
             parts.append(doctor_summary)
         text = ' '.join(parts)

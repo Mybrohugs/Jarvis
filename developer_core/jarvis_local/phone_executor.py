@@ -8,6 +8,7 @@ Everything else stays in the queue for a person at the PC.
 from __future__ import annotations
 import argparse
 import collections
+import re
 import time
 from .pwa_gateway import PhoneQueue
 from .router import UnifiedTaskRouter
@@ -19,7 +20,11 @@ ALLOWED = ('media-volume', 'media-mute', 'media-scene',
            'reminder-add', 'reminder-list', 'reminder-cancel',  # speak/push only
            'music', 'music-status',  # PC player: pause/play/next/previous
            'home-devices', 'home-switch', 'home-brightness', 'home-scenario', 'home-routine',  # Yandex lights/sockets
+           'station-status', 'station-say', 'station-volume', 'station-control',  # Yandex Station; Alice commands at the PC
+           'phone-status',  # the iPhone as Home Assistant sees it
+           'skill-teach', 'skill-save', 'skill-list', 'skill-forget', 'skill-unlearn',  # stored plans; their steps pass validate() on use
            'screen-describe',  # local vision model, the picture stays on the PC
+           'tv-play', 'tv-link',  # a YouTube link to the TV (switches it on, never off)
            'web-answer',  # own SearXNG + local summary
            'web-search', 'web-open', 'web-open-result', 'web-site-search', 'web-save',  # own browser; no downloads
            'excel-summary', 'excel-column', 'excel-find', 'excel-open',  # read tables, open one; edits at the PC
@@ -89,7 +94,40 @@ def validate(auto):
         if set(args) != {'name'} or args['name'] not in ('home', 'away', 'morning', 'evening'):
             raise Denied('Bad routine')
         return task, {'name': args['name']}
-    if task == 'home-devices':
+    if task == 'station-say':
+        if set(args) != {'text'} or not isinstance(args['text'], str) or not 1 <= len(args['text']) <= 300:
+            raise Denied('Bad station text')
+        return task, {'text': args['text']}
+    if task == 'station-volume':
+        if set(args) != {'level'} or type(args['level']) is not int or not 0 <= args['level'] <= 10:
+            raise Denied('Bad station volume')
+        return task, {'level': args['level']}
+    if task == 'station-control':
+        if set(args) != {'action'} or args['action'] not in ('pause', 'play', 'next', 'previous'):
+            raise Denied('Bad station action')
+        return task, {'action': args['action']}
+    if task == 'skill-teach':
+        if set(args) != {'name', 'phrase'} or not isinstance(args['name'], str) or not 2 <= len(args['name']) <= 40 \
+                or not isinstance(args['phrase'], str) or not 3 <= len(args['phrase']) <= 300:
+            raise Denied('Bad skill')
+        return task, {'name': args['name'], 'phrase': args['phrase']}
+    if task == 'tv-play':
+        if set(args) != {'url'} or not isinstance(args['url'], str) or not 10 <= len(args['url']) <= 500                 or not args['url'].lower().startswith(('http://', 'https://')):
+            raise Denied('Bad link')
+        return task, {'url': args['url']}  # the router keeps only a YouTube video id from it
+    if task == 'tv-link':
+        if set(args) != {'code'} or not isinstance(args['code'], str) or not re.fullmatch(r'\d{12}', args['code']):
+            raise Denied('Bad code')
+        return task, {'code': args['code']}
+    if task == 'skill-unlearn':
+        if set(args) != {'phrase'} or not isinstance(args['phrase'], str) or not 2 <= len(args['phrase']) <= 300:
+            raise Denied('Bad phrase')
+        return task, {'phrase': args['phrase']}
+    if task in ('skill-save', 'skill-forget'):
+        if set(args) != {'name'} or not isinstance(args['name'], str) or not 2 <= len(args['name']) <= 40:
+            raise Denied('Bad skill name')
+        return task, {'name': args['name']}
+    if task in ('home-devices', 'station-status', 'phone-status', 'skill-list'):
         if args:
             raise Denied('No arguments expected')
         return task, {}
@@ -193,7 +231,8 @@ def validate(auto):
 
 def speech_for(task, result):
     after = result.get('after') or {}
-    if task == 'media-scene' or task.startswith(('pc-', 'profile-', 'reminder-', 'music', 'home-', 'screen-', 'web-', 'chat-',
+    if task == 'media-scene' or task.startswith(('pc-', 'profile-', 'reminder-', 'music', 'home-', 'station-', 'screen-', 'web-', 'chat-',
+                                                  'phone-', 'skill-', 'tv-',
                                                   'app-', 'file-open', 'desktop-', 'windows-list')):
         return result.get('speech') or 'Готово.'
     if result.get('status') != 'PASS':
@@ -214,7 +253,7 @@ class PhoneExecutor:
     def interpret(self, item):
         """Feature 6 for the phone: plan free speech; run it only if EVERY step is allowlisted."""
         from .llm_planner import understand_smart
-        plan = understand_smart(item['text'], **({'chat': self.chat} if self.chat else {}))
+        plan = understand_smart(item['text'], skills=self.router.skills, **({'chat': self.chat} if self.chat else {}))
         if plan['intent'] != 'plan':
             self.queue.note(item['id'], 'Не понял команду. Запрос оставлен в очереди для компьютера.'
                             if plan['intent'] == 'unknown' else 'Это нельзя: ' + plan.get('reason', '')[:120])
@@ -231,6 +270,11 @@ class PhoneExecutor:
         try:
             for task, args in checked:
                 speech.append(speech_for(task, self.router.dispatch(task, **self.capped(task, args))))
+            offer = self.router.skills.done(item['text'], plan)
+            if plan.get('learn'):
+                speech.append('Запомнил: «%s» теперь значит это.' % plan['learn'][:60])
+            if offer:
+                speech.append(offer)
             self.queue.close(item['id'], 'done',
                              self.personal(item['text'], [label(t, a) for t, a in checked], ' '.join(speech)),
                              origin='phone-executor')
@@ -347,23 +391,41 @@ class PhoneExecutor:
     def fire_reminders(self, now=None, speak=None):
         """Due reminders: say them aloud at the PC (JARVIS voice) and push them to the phone."""
         fired = self.router.reminders.due(now)
+        quiet = bool(fired) and self.router.quiet()  # Sleep on the iPhone: push only, nobody speaks
         for item in fired:
             text = 'Сэр, напоминаю: %s.' % item['text'].rstrip('.')
             try:
                 text = self.router.profile.adapt(text)
             except Exception:
                 pass
-            if speak is None:
+            if speak is None and not quiet:
                 from .voice_loop import say
                 speak = say
             try:
-                speak(text)
+                if not quiet:
+                    speak(text)
+            except Exception:
+                pass
+            station = False
+            try:  # at home the Yandex Station says it too, so it is heard away from the PC
+                sp = self.router.speaker() if self.router.at_home() and not quiet else None
+                if sp is not None:
+                    sp.say_long(text)
+                    station = True
             except Exception:
                 pass
             self._push('Напоминание', item['text'][:180], '/')
             self.router.ws.journal.record('reminder-fired', 'PASS', reminder=item['id'], repeat=item.get('repeat'),
-                                          rollback=[])
+                                          station=station, quiet=quiet, rollback=[])
         return fired
+
+    def watch_phone(self):
+        """Presence / Sleep / battery of the iPhone via Home Assistant (phone_watch), when HA is set up."""
+        if not hasattr(self, 'phone_watch'):
+            from .station import keys
+            from .phone_watch import PhoneWatch
+            self.phone_watch = PhoneWatch(self.router) if keys().configured() else None
+        return self.phone_watch.step() if self.phone_watch else []
 
     def run(self, interval=0.5):
         last_sched = last_remind = 0
@@ -384,6 +446,10 @@ class PhoneExecutor:
                     self.scheduled()
                 except Exception as exc:
                     print('schedule error:', type(exc).__name__, str(exc)[:200], flush=True)
+                try:
+                    self.watch_phone()
+                except Exception as exc:  # HA down or restarting: try again in 30 s
+                    print('phone watch error:', type(exc).__name__, str(exc)[:200], flush=True)
             time.sleep(interval)
 
 

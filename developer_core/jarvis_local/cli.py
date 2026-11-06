@@ -135,12 +135,16 @@ def main(argv=None):
     try:
         router = UnifiedTaskRouter(open_session(q.read_only), q.workspace, q.v8, q.v2)
         if q.command == 'ask':
-            plan = understand_smart(q.text)
+            plan = understand_smart(q.text, skills=router.skills)
             if plan['intent'] != 'plan' or q.plan_only:
                 print(json.dumps(plan, ensure_ascii=False, indent=2))
                 return 0 if plan['intent'] == 'plan' else 1
             print('ПЛАН: ' + plan['summary'], file=sys.stderr)
             result = run_plan(router, plan)
+            if result.get('status') == 'PASS':
+                offer = router.skills.done(q.text, plan)
+                if offer:
+                    print(offer, file=sys.stderr)
         else:
             result = router.dispatch('speech-create' if q.command == 'speech' else q.command, **kwargs(q))
         print(json.dumps(result, ensure_ascii=False, indent=2))

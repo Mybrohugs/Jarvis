@@ -1,6 +1,6 @@
 'use strict';
 // Caches only the app shell. API responses (/api/*) are never cached.
-const CACHE = 'jarvis-shell-v13';
+const CACHE = 'jarvis-shell-v16';
 
 // Feature 3: Web Push. Payload is end-to-end encrypted; shown as text only.
 self.addEventListener('push', (e) => {

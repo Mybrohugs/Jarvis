@@ -26,6 +26,19 @@ FRUSTRATED = re.compile(r'\b(не то|опять|снова не|да что ж
 MAX_FACTS = 200
 
 
+YOU = (('у меня', 'у вас'), ('я живу', 'вы живёте'), ('я работаю', 'вы работаете'), ('я учусь', 'вы учитесь'),
+       ('я родился', 'вы родились'), ('я родилась', 'вы родились'), ('моего', 'вашего'), ('моей', 'вашей'),
+       ('мой', 'ваш'), ('моя', 'ваша'), ('моё', 'ваше'), ('мое', 'ваше'), ('мои', 'ваши'), ('мою', 'вашу'),
+       ('мне', 'вам'), ('я', 'вы'))
+
+
+def you(text):
+    """'у меня есть кот Барсик' -> 'у вас есть кот Барсик': JARVIS repeats a fact back to its owner."""
+    for me, yours in YOU:
+        text = re.sub(r'(?<![\w-])%s(?![\w-])' % me, yours, text, flags=re.I)
+    return text
+
+
 def _now():
     return datetime.datetime.now().astimezone()
 
@@ -80,7 +93,7 @@ class Profile:
         self.ws.journal.record('profile-remember', 'PASS', kind=kind, chars=len(text), rollback=[])
         return {'status': 'PASS', 'speech': {'hobby': 'Запомнил ваше увлечение: %s.', 'like': 'Запомнил: вам нравится %s.',
                                              'dislike': 'Запомнил: вам не нравится %s.',
-                                             'fact': 'Запомнил: %s.'}[kind] % text}
+                                             'fact': 'Запомнил: %s.'}[kind] % (you(text) if kind == 'fact' else text)}
 
     def set_style(self, style):
         if style not in ('short', 'detailed', None):

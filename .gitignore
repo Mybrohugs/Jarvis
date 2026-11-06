@@ -8,3 +8,13 @@ __pycache__/
 .sony-dev/
 .telegram-dev/
 .jarvis_local/
+
+.tv-phone-dev/
+.desktop-behavior-dev/
+.home-assistant-dev/
+.youtube-tv-dev/
+.models/
+.browsers/
+.services/
+live-evidence/
+*.dpapi

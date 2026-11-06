@@ -28,6 +28,27 @@ def safe_name(name):
     return stem + ('.' + ext if ext else '')
 
 
+# The iOS share sheet often sends a photo or a note with no name at all. A harmless extension is
+# guessed from the first bytes so the file opens in the right app; never an executable one.
+MAGIC = ((b'\xff\xd8\xff', 'jpg'), (b'\x89PNG', 'png'), (b'%PDF', 'pdf'), (b'GIF8', 'gif'),
+         (b'PK\x03\x04', 'zip'))
+
+
+def guess_ext(data):
+    head = bytes(data[:16])
+    for sig, ext in MAGIC:
+        if head.startswith(sig):
+            return ext
+    if head[4:8] == b'ftyp':
+        brand = head[8:12]
+        return 'heic' if brand in (b'heic', b'heix', b'mif1', b'msf1') else 'mov' if brand == b'qt  ' else 'mp4'
+    try:
+        bytes(data[:4096]).decode('utf-8')
+        return 'txt'
+    except UnicodeDecodeError:
+        return ''
+
+
 def save(data, name, inbox=INBOX):
     if not isinstance(data, (bytes, bytearray)) or not 0 < len(data) <= MAX_UPLOAD:
         raise ValueError('file must be 1 byte .. 50 MB')
@@ -36,6 +57,8 @@ def save(data, name, inbox=INBOX):
     if inbox.is_symlink() or os.path.realpath(inbox) != os.path.abspath(inbox):
         raise PermissionError('inbox must not be a link or junction')
     clean = safe_name(name)
+    if '.' not in clean.lstrip('.') and guess_ext(data):
+        clean += '.' + guess_ext(data)
     stem, dot, ext = clean.rpartition('.')
     if not dot:
         stem, ext = clean, ''

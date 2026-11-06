@@ -54,12 +54,15 @@ class VoiceAssistant:
         text = (text or '').strip()
         if len(text) < 2:
             return None
-        plan = self.planner(text)
+        if self.planner is understand_smart:  # skills first, then rules and the LLM; learns corrections
+            plan = understand_smart(text, skills=self.router.skills)
+        else:
+            plan = self.router.skills.match(text) or self.planner(text)
         if plan['intent'] != 'plan':
             answer = 'Это я не выполняю.' if plan['intent'] == 'refused' else 'Не понял, повторите, пожалуйста.'
             self.speak(answer)
             return answer
-        answers = []
+        answers, failed = [], False
         for step in plan['steps']:
             task, args = step['task'], step['args']
             try:
@@ -74,8 +77,19 @@ class VoiceAssistant:
                 result = self.router.dispatch(task, **args)
                 answers.append(speech_for(task, result))
             except Denied as exc:
+                failed = True
                 answers.append('Это нужно подтвердить кодом в консоли.' if 'allowlisted' in str(exc) or
                                'Not an' in str(exc) else 'Не получилось: %s.' % str(exc)[:80])
+        offer = None
+        if not failed:
+            try:  # "запомни это как …" names this plan; an LLM plan is reused; a correction is learned
+                offer = self.router.skills.done(text, plan)
+            except OSError:
+                pass
+        if plan.get('learn') and not failed:
+            answers.append('Запомнил: «%s» теперь значит это.' % plan['learn'][:60])
+        if offer:
+            answers.append(offer)
         answer = ' '.join(a for a in answers if a)
         labels = [s['task'] + (':' + s['args'].get('name', '') if s['task'] == 'media-scene' else '')
                   for s in plan['steps']]
@@ -104,7 +118,9 @@ class VoiceAssistant:
             return result.get('speech', '')
         if task == 'phone-queue':
             n = len(result.get('pending', []))
-            return 'С телефона ждут %d запрос(а).' % n if n else 'Очередь пуста.'
+            from .pwa_gateway import plural
+            return 'С телефона %s %d %s.' % (plural(n, 'ждёт', 'ждут', 'ждут'), n,
+                                            plural(n, 'запрос', 'запроса', 'запросов')) if n else 'Очередь пуста.'
         return 'JARVIS на связи, всё работает.'
 
 

@@ -49,6 +49,7 @@ class YandexTests(unittest.TestCase):
         self.router = UnifiedTaskRouter(TrustedLocalSession.phone_allowlist(ALLOWED), self.tmp.name)
         self.api = FakeYandex()
         self.router._yandex = YandexHome(FakeKeys(), self.api)
+        self.router._station = None  # no Yandex Station here (tests/test_jarvis_station.py covers it)
 
     def run_phrase(self, phrase):
         step = understand(phrase)['steps'][0]

@@ -54,6 +54,21 @@ class PWATests(unittest.TestCase):
         self.assertNotIn('<script>', html)  # no inline script (strict CSP)
         self.assertNotIn('style="', html)
 
+    def test_pc_exchange_menu(self):
+        import re
+        html = self.req('GET', '/', token=None)[1].decode()
+        js = self.req('GET', '/app.js', token=None)[1].decode()
+        for el_id in ('topc', 'topc2', 'pickfile', 'findpc'):
+            self.assertIn('id="%s"' % el_id, html)
+            self.assertIn("$('%s')" % el_id, js)
+        self.assertIn("fetch('/api/upload'", js)
+        self.assertIn("'X-Filename': encodeURIComponent(", js)
+        # every chip phrase in the PC section reaches a PC task, not the slow LLM path
+        section = html.split('Обмен с ПК', 1)[1].split('</div>', 1)[0]
+        phrases = re.findall(r'data-phrase="([^"]+)"', section)
+        self.assertEqual([pwa_gateway.phone_quick_command(p)['task'] for p in phrases], ['pc-clip-get', 'pc-screen'])
+        self.assertEqual(pwa_gateway.phone_quick_command('найди на компьютере отчёт')['task'], 'pc-find')
+
     def test_auth_and_host_guard(self):
         self.assertEqual(self.req('GET', '/api/summary', token=None)[0].status, 401)
         self.assertEqual(self.req('GET', '/api/summary', token='b' * 40)[0].status, 401)

@@ -1,0 +1,2 @@
+# Patch context lines intentionally include a leading space.
+desktop-patches/*.patch -whitespace

@@ -446,6 +446,63 @@ document.querySelectorAll('.chips [data-phrase]').forEach((b) => {
   b.onclick = () => { settings(false); $('say').value = b.dataset.phrase; ask({ preventDefault() {} }); };
 });
 
+// Phone -> PC: picked files go one by one to /api/upload (raw body); the PC saves them to
+// «Загрузки\JARVIS с телефона» and never opens them.
+const MAX_UPLOAD = 50 * 1000 * 1000;
+async function uploadOne(file) {
+  if (!file.size || file.size > MAX_UPLOAD) { throw new Error(file.name + ': размер от 1 байта до 50 МБ'); }
+  const r = await fetch('/api/upload', {
+    method: 'POST', body: file, cache: 'no-store',
+    headers: { Authorization: 'Bearer ' + token, 'X-Filename': encodeURIComponent(file.name || 'file'),
+               'Content-Type': 'application/octet-stream' },
+  });
+  if (r.status === 401) { throw new Error('auth'); }
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) { throw new Error(data.error || ('HTTP ' + r.status)); }
+  return data.saved_as || file.name;
+}
+async function uploadPicked() {
+  const files = Array.from($('pickfile').files || []);
+  $('pickfile').value = '';
+  if (!files.length) { return; }
+  unlockSpeech();
+  setState('thinking');
+  $('extra').replaceChildren();
+  const done = [];
+  try {
+    for (const [i, f] of files.entries()) {
+      $('reply').textContent = 'Отправляю на ПК ' + (i + 1) + ' из ' + files.length + '…';
+      done.push(await uploadOne(f));
+    }
+    online(true, 'в сети');
+    say(done.length === 1 ? 'Файл «' + done[0] + '» на компьютере, в папке «JARVIS с телефона».'
+                          : 'Файлов на компьютере: ' + done.length + ', в папке «JARVIS с телефона».');
+  } catch (e) {
+    say(e.message === 'auth' ? 'Ключ больше не действует.'
+        : 'Отправлено ' + done.length + ' из ' + files.length + '. Ошибка: ' + e.message, true);
+  }
+}
+$('pickfile').onchange = uploadPicked;
+$('topc').onclick = () => $('pickfile').click();
+$('topc2').onclick = () => { settings(false); $('pickfile').click(); };
+$('findpc').onclick = () => { settings(false); $('say').value = 'найди на компьютере '; $('say').focus(); };
+// Share sheet: an iOS Shortcut posts the shared item to the same /api/upload with this device's key.
+function copyTo(btn, text, label) {
+  navigator.clipboard.writeText(text).then(() => { btn.textContent = label; }, () => { btn.textContent = 'не удалось'; });
+}
+$('copyurl').onclick = () => copyTo($('copyurl'), location.origin + '/api/upload', 'адрес скопирован');
+$('copysay').onclick = () => copyTo($('copysay'), location.origin + '/api/say', 'адрес скопирован');
+// A YouTube link copied on the iPhone -> the TV. iOS asks once to allow pasting.
+$('totv').onclick = async () => {
+  settings(false);
+  let text = '';
+  try { text = await navigator.clipboard.readText(); } catch (e) { /* not allowed: type it */ }
+  const link = (text.match(/https?:\/\/\S+/) || [])[0];
+  $('say').value = 'на телевизор ' + (link || '');
+  if (link) { ask({ preventDefault() {} }); } else { $('say').focus(); }
+};
+$('copykey').onclick = () => copyTo($('copykey'), 'Bearer ' + token, 'ключ скопирован');
+
 // Push-to-talk: the phone records, the PC transcribes (/api/listen, text only), then it is sent like typed text.
 // Hold the reactor or the mic to talk and release to send; a short tap starts, the next tap sends.
 let rec = null, recStream = null, recStart = 0, recTimer = 0, meter = 0;
