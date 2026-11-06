@@ -5,6 +5,7 @@ python-pptx
 python-docx
 Pillow
 # Optional features
+pychromecast      # video links from PC / paired phone to a Google Cast TV
 anthropic          # speeches and presentations (Claude API)
 pywebpush          # iPhone push notifications
 faster-whisper     # "Hey JARVIS" speech recognition

@@ -32,6 +32,41 @@ function show(screen) {
   $('app').hidden = screen !== 'app';
 }
 
+// Explicit owner submission only: the gateway queues this request for the PC executor.
+async function submitTVVideo(e) {
+  e.preventDefault();
+  if ($('tvsend').disabled) { return; }
+  const url = $('tvurl').value.trim();
+  try {
+    const parsed = new URL(url);
+    if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || url.length > 2000) {
+      throw new Error('invalid URL');
+    }
+  } catch (err) {
+    $('tvmsg').textContent = 'Вставьте полную ссылку HTTP/HTTPS без пароля, до 2000 символов.';
+    return;
+  }
+  if (!token) { $('tvmsg').textContent = 'Сначала подключите телефон к компьютеру.'; show('setup'); return; }
+  $('tvsend').disabled = true;
+  $('tvmsg').textContent = 'Добавляю запрос в очередь ПК…';
+  try {
+    const result = await api('/api/tv/play', { url });
+    if (result.status !== 'pending' || !result.id) { throw new Error(result.error || 'очередь не подтвердила запрос'); }
+    $('tvmsg').textContent = (result.speech || 'Запрос добавлен в очередь ПК.') +
+      ' Воспроизведение пока не подтверждено. Результат — во вкладке «Очередь»; проверьте экран ТВ.';
+  } catch (err) {
+    if (err.message === 'auth') {
+      $('tvmsg').textContent = 'Подключение телефона истекло. Подключитесь заново.';
+      $('setup-msg').textContent = 'Подключение истекло. Введите новый код с компьютера.';
+      show('setup');
+    } else {
+      $('tvmsg').textContent = 'Не удалось подтвердить запрос: ' + err.message +
+        '. Проверьте ПК и очередь перед повторной отправкой.';
+    }
+  } finally { $('tvsend').disabled = false; }
+}
+$('tvform').onsubmit = submitTVVideo;
+
 function el(tag, cls, text) {
   const n = document.createElement(tag);
   if (cls) { n.className = cls; }

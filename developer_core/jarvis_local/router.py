@@ -34,6 +34,7 @@ TASKS = {
     'phone-queue': 'read', 'phone-queue-close': 'local',
     'media-status': 'read', 'media-power': 'write', 'media-volume': 'write', 'media-mute': 'write',
     'media-bass': 'write', 'media-ps5': 'write', 'media-scene': 'write',
+    'media-cast': 'write', 'media-cast-config': 'write',
     'doctor': 'read', 'briefing': 'read', 'briefing-city': 'selftest', 'push-test': 'selftest',
     'pc-find': 'write', 'pc-send': 'write', 'pc-clip-get': 'write', 'pc-clip-set': 'write', 'pc-screen': 'write',
     'profile-show': 'read', 'profile-remember': 'write', 'profile-forget': 'write', 'profile-style': 'write',
@@ -174,6 +175,14 @@ class UnifiedTaskRouter:
 
     def _notepad_set_text(self, text):
         return self.notepad.set_text(text, self.session)
+
+    def _media_cast(self, url):
+        from .tv_cast import VideoCaster
+        return VideoCaster(self.ws).play(url, self.session)
+
+    def _media_cast_config(self, name):
+        from .tv_cast import VideoCaster
+        return VideoCaster(self.ws).configure(name, self.session)
 
     def _media_status(self):
         return self.media.status()

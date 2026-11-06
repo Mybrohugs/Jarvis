@@ -557,6 +557,13 @@ def chat_plan(text):
 def understand(text):
     if not isinstance(text, str) or not text.strip() or len(text) > 2000:
         return {'intent': 'unknown', 'steps': [], 'reason': 'Пустая или слишком длинная команда'}
+    from .tv_cast import video_command
+    try:
+        url = video_command(text)
+    except ValueError as exc:
+        return {'intent': 'refused', 'steps': [], 'reason': str(exc)}
+    if url:
+        return {'intent': 'plan', 'steps': [_step('media-cast', url=url)], 'summary': 'Передать видео на ТВ'}
     steps = chat_plan(text)
     if steps:
         return {'intent': 'plan', 'steps': steps, 'summary': describe(steps)}

@@ -40,6 +40,8 @@ def parser():
     s.add_argument('text')
     s.add_argument('--plan-only', action='store_true')
     sub.add_parser('media-status')
+    sub.add_parser('media-cast', help='передать ссылку YouTube / MP4 / WebM / M3U8 на ТВ').add_argument('url')
+    sub.add_parser('media-cast-config', help='точное имя ТВ Google Cast (настройка только на ПК)').add_argument('name')
     sub.add_parser('media-ps5')
     sub.add_parser('media-scene').add_argument('name', choices=['game', 'movie', 'night'])
     sub.add_parser('media-power').add_argument('state', choices=['on', 'off'])
@@ -105,6 +107,7 @@ def kwargs(q):
             'browser-allow-host': lambda: {'host': q.host}, 'notepad-set-text': lambda: {'text': q.text},
             'phone-queue-close': lambda: {'item_id': q.item_id, 'outcome': q.outcome},
             'media-power': lambda: {'on': q.state == 'on'}, 'media-mute': lambda: {'on': q.state == 'on'},
+            'media-cast': lambda: {'url': q.url}, 'media-cast-config': lambda: {'name': q.name},
             'media-volume': lambda: {'level': q.level, 'delta': q.delta},
             'media-scene': lambda: {'name': q.name}, 'briefing-city': lambda: {'city': q.city},
             'media-bass': lambda: {'level': q.level, 'delta': q.delta}, 'browser-read': lambda: {'url': q.url},
@@ -145,7 +148,7 @@ def main(argv=None):
             result = router.dispatch('speech-create' if q.command == 'speech' else q.command, **kwargs(q))
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result.get('status') in ('PASS', 'PLAN_ONLY', 'STARTED', 'CLOSED', 'ALREADY_CLOSED',
-                                             'HOST_ALLOWED_DEV', 'WARN') else 1
+                                             'HOST_ALLOWED_DEV', 'WARN', 'REQUESTED') else 1
     except (Denied, OSError, ValueError, KeyError, subprocess.TimeoutExpired) as exc:
         print('DENIED: ' + type(exc).__name__ + ': ' + str(exc)[:500], file=sys.stderr)
         return 2

@@ -13,7 +13,7 @@ from .pwa_gateway import PhoneQueue
 from .router import UnifiedTaskRouter
 from .session import Denied, TrustedLocalSession
 
-ALLOWED = ('media-volume', 'media-mute', 'media-scene',
+ALLOWED = ('media-volume', 'media-mute', 'media-scene', 'media-cast',
            'pc-find', 'pc-send', 'pc-clip-get', 'pc-clip-set', 'pc-screen',  # 7, 9, 10: user-authorised
            'profile-remember', 'profile-forget', 'profile-style', 'profile-show',  # the user's own profile
            'reminder-add', 'reminder-list', 'reminder-cancel',  # speak/push only
@@ -42,6 +42,12 @@ def validate(auto):
     if not isinstance(auto, dict) or auto.get('task') not in ALLOWED or not isinstance(auto.get('args'), dict):
         raise Denied('Not an allowlisted phone command')
     task, args = auto['task'], auto['args']
+    if task == 'media-cast':
+        from .tv_cast import video_request
+        if set(args) != {'url'}:
+            raise Denied('Нужна только ссылка на видео')
+        video_request(args['url'])
+        return task, {'url': args['url']}
     if task == 'chat-reply':
         if set(args) != {'kind'} or args['kind'] not in ('greet', 'how', 'thanks', 'bye'):
             raise Denied('Bad chat reply')
@@ -193,7 +199,7 @@ def validate(auto):
 
 def speech_for(task, result):
     after = result.get('after') or {}
-    if task == 'media-scene' or task.startswith(('pc-', 'profile-', 'reminder-', 'music', 'home-', 'screen-', 'web-', 'chat-',
+    if task in ('media-scene', 'media-cast') or task.startswith(('pc-', 'profile-', 'reminder-', 'music', 'home-', 'screen-', 'web-', 'chat-',
                                                   'app-', 'file-open', 'desktop-', 'windows-list')):
         return result.get('speech') or 'Готово.'
     if result.get('status') != 'PASS':
